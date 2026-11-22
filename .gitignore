@@ -2,5 +2,6 @@
 **/obj/
 **/node_modules/
 **/_app-output/
+artifacts/
 .vs/
 *.user

@@ -10,6 +10,16 @@ Prérequis : Windows, .NET 10 SDK/runtime, Microsoft Edge WebView2 Runtime, Node
 dotnet run --project src/KeyceCode/KeyceCode.csproj
 ```
 
+## Installer Windows
+
+Le programme d’installation x64 autonome peut être généré avec :
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/publish-installer.ps1
+```
+
+Le script publie KeyceCode avec le runtime .NET inclus et crée `KeyceCode-Setup-0.1.0.exe` sur le Bureau. Il utilise Inno Setup 6 et télécharge le bootstrapper WebView2 officiel de Microsoft; l’installateur vérifie sa signature Microsoft avant de le compiler dans le Setup. WebView2 est installé silencieusement pendant l’installation si nécessaire. Les artefacts de génération restent dans `artifacts/` et ne sont pas versionnés.
+
 Les ressources Monaco préconstruites sont incluses. Pour les régénérer après modification du client Web :
 
 ```powershell
