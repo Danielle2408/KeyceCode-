@@ -40,3 +40,30 @@ Page to host:
 The bridge only accepts the documented message types and does not expose arbitrary file or process access to JavaScript. File I/O, command execution, LSP, and formatting remain host responsibilities. Treat all messages as untrusted input and validate IDs, sizes, paths, ranges and command names in C#.
 
 Monaco supplies the browser editor, built-in syntax tokenization and selected browser language tooling. It is not the full VS Code Workbench and does not provide C# IntelliSense, external language servers, formatting, debugging, tasks, Git, or VS Code extension-host compatibility by itself. Add these through explicit LSP/DAP/host integrations.
+
+## Integrated xterm.js terminal
+
+The integrated terminal client is a separate `terminal.html` page with a strict CSP. Build copies pinned `@xterm/xterm` 6.0.0, `@xterm/addon-fit` 0.11.0, their CSS and individual MIT license files into `dist/`; no CDN or network connection is used by the terminal page. The page supports xterm VT rendering, selection, browser clipboard shortcuts, keyboard input and resize fitting. The host remains responsible for running a real ConPTY process and exchanging bytes/text.
+
+Host setup: map the same output `WebEditor/dist` folder to the virtual secure origin `https://keyce.local/` and navigate the terminal WebView2 to `https://keyce.local/terminal.html`. Configure the WebView to allow clipboard access and avoid registering arbitrary host objects. Wait for the `ready` message before starting/sizing a PTY. The host should encode `input.data` as UTF-8 and pass it unchanged to ConPTY, and decode PTY UTF-8/VT output before sending it back as `write.data`. For terminal resize events, resize the PTY to the reported columns and rows. The terminal emits ordinary terminal control sequences for Enter, arrows, Ctrl+C, function keys, bracketed paste, etc.; do not reinterpret these as WPF shortcuts while the terminal owns focus.
+
+Terminal host-to-page messages through `PostWebMessageAsJson`:
+
+- `write`: `{ "type":"write", "data":"... UTF-8 decoded VT output ..." }`
+- `clear`: `{ "type":"clear" }`
+- `resize`: `{ "type":"resize", "cols":120, "rows":32 }`
+- `setTheme`: `{ "type":"setTheme", "theme":"dark|light|hc-black|hc-light|vs-dark|vs" }`
+- `setOptions`: `{ "type":"setOptions", "options":{"fontSize":13,"fontFamily":"Cascadia Code","scrollback":5000,"theme":"dark"} }`
+- `fit`, `focus`, `dispose`
+
+Terminal page-to-host messages through `window.chrome.webview.postMessage`:
+
+- `ready`: terminal booted; includes initial `cols`, `rows` and capabilities.
+- `input`: `{ "type":"input", "data":"..." }` contains the raw VT input string. This is Unicode text/control data that the host should UTF-8 encode and write to ConPTY verbatim.
+- `resize`: `{ "type":"resize", "cols":120, "rows":32 }` means call `ResizePseudoConsole(cols, rows)` for the associated PTY.
+- `closed`: page/terminal is closing; stop the associated process and dispose the PTY.
+- `terminalError`: client-side initialization or fitting error.
+
+On every `pagehide`, xterm sends `closed`, disposes browser-side resources and the host should terminate the associated PTY. Do not restart the PTY from `resize`; only adjust its dimensions. Theme names map to bundled VS Code-like dark/light palettes; the host can set font and size live.
+
+Clipboard copy/paste behavior is provided by xterm.js and WebView2's keyboard/clipboard integration. Ensure focus is given to the terminal when it is selected. Because xterm input contains terminal control codes, treat it as input to the explicitly selected active shell, never as a command string to a separate shell API.

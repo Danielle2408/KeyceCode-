@@ -1,0 +1,18 @@
+:root {
+  color-scheme: dark;
+  --terminal-bg: #181818;
+  --terminal-fg: #cccccc;
+  --terminal-cursor: #aeafad;
+  --terminal-selection: #264f78;
+  --terminal-font: "Cascadia Code", Consolas, monospace;
+  --terminal-font-size: 13px;
+}
+html, body, #terminal { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--terminal-bg); }
+body { color: var(--terminal-fg); }
+#terminal { box-sizing: border-box; padding: 8px 10px; }
+.xterm { height: 100%; color: var(--terminal-fg); font-family: var(--terminal-font); font-size: var(--terminal-font-size); }
+.xterm-viewport { overflow-y: auto !important; scrollbar-color: #555 #181818; }
+.xterm .xterm-viewport::-webkit-scrollbar { width: 10px; }
+.xterm .xterm-viewport::-webkit-scrollbar-thumb { background: #79797966; }
+.xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #797979aa; }
+.xterm .xterm-selection div { background: var(--terminal-selection) !important; }
