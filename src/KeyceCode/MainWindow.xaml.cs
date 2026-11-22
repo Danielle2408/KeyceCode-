@@ -63,6 +63,7 @@ public partial class MainWindow : Window
             catch (Exception ex) { OutputPanel.AppendText("Arrêt LSP : " + ex.Message + Environment.NewLine); }
             _languageServer = null;
         }
+        _extensionGallery.Dispose();
     }
 
     private async Task ConfigureLanguageServerAsync(string workspacePath)

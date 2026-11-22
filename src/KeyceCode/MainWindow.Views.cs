@@ -136,14 +136,6 @@ public partial class MainWindow
     private void SplitEditor_Click(object sender, RoutedEventArgs e) =>
         StatusMessage.Text = "Les groupes d’éditeurs côte à côte sont encore en développement.";
 
-    private void SearchMarketplace_Click(object sender, RoutedEventArgs e)
-    {
-        if (string.IsNullOrWhiteSpace(ExtensionSearch.Text)) { StatusMessage.Text = "Entrez un nom ou une catégorie."; return; }
-        var uri = "https://open-vsx.org/extension/query?search=" + Uri.EscapeDataString(ExtensionSearch.Text.Trim());
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri) { UseShellExecute = true });
-        StatusMessage.Text = "Open VSX s’est ouvert dans le navigateur; l’installation intégrée n’est pas disponible.";
-    }
-
     private void Theme_Click(object sender, RoutedEventArgs e)
     {
         var service = ((App)Application.Current).ThemeService;

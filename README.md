@@ -27,6 +27,7 @@ dotnet build src/KeyceCode/KeyceCode.csproj --configuration Release
 - Recherche workspace par expression régulière et filtre de fichiers; palette de commandes et accès rapide aux fichiers.
 - Terminal PowerShell/cmd persistant via processus redirigé, profils de base, exécution de fichiers/projets .NET, Python, JavaScript et PowerShell. Ce terminal n’utilise pas encore ConPTY/xterm.js.
 - Git : branche/état, stage/unstage/discard par menu contextuel, commit des fichiers déjà stagés.
+- Galerie Open VSX intégrée : recherche, détails et téléchargement VSIX Windows dans `%LOCALAPPDATA%\KeyceCode\extensions\downloads`. Le paquet est conservé sur disque et n’est ni installé ni exécuté par KeyceCode.
 - Client Gemini KeyceIA pour chat et insertion de suggestion au curseur.
 - Serveur LSP configurable par variables d’environnement : completion standard, diagnostics vers les marqueurs Monaco et Problems, synchronisation des documents ouverts.
 
@@ -51,7 +52,7 @@ Pour un serveur .NET lancé par `dotnet`, utilisez `$env:KEYCECODE_LSP_EXECUTABL
 
 ## Limites connues, non présentées comme terminées
 
-La galerie d’extensions ouvre actuellement Open VSX dans le navigateur; l’installation/activation de VSIX dans un extension host KeyceCode n’est pas encore implémentée. Le serveur LSP doit être installé et configuré séparément par l’utilisateur; aucun langage serveur n’est inclus. Aucun adaptateur DAP n’est intégré; le bouton Déboguer l’indique. Le terminal exécute un shell persistant mais n’a pas de pseudo-terminal complet. Les groupes d’éditeurs multiples, Settings Sync, profils, notebooks et remote development restent à développer.
+La galerie permet de rechercher et télécharger des VSIX depuis Open VSX; l’installation, l’activation et la compatibilité d’un extension host KeyceCode ne sont pas encore implémentées. Le serveur LSP doit être installé et configuré séparément par l’utilisateur; aucun langage serveur n’est inclus. Aucun adaptateur DAP n’est intégré; le bouton Déboguer l’indique. Le terminal exécute un shell persistant mais n’a pas de pseudo-terminal complet. Les groupes d’éditeurs multiples, Settings Sync, profils, notebooks et remote development restent à développer.
 
 ## Dépôt distant
 
