@@ -366,10 +366,11 @@ public partial class MainWindow
         if (_documents.Any(d => d.IsDirty))
         {
             e.Cancel = true;
-            if (await ConfirmDirtyDocumentsAsync()) { _documents.Clear(); _gemini.Dispose(); Close(); }
+            if (await ConfirmDirtyDocumentsAsync()) { SaveSession(); _documents.Clear(); _gemini.Dispose(); Close(); }
         }
         else
         {
+            SaveSession();
             _gemini.Dispose();
             try { if (_terminalProcess is { HasExited: false }) _terminalProcess.Kill(entireProcessTree: true); }
             catch (InvalidOperationException) { }

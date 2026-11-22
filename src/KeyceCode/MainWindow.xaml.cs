@@ -12,6 +12,7 @@ public partial class MainWindow : Window
 {
     private readonly GeminiService _gemini = new();
     private readonly EditorPreferencesService _preferencesService = new();
+    private readonly WorkspaceSessionService _sessionService = new();
     private EditorPreferences _editorPreferences;
     private readonly List<EditorDocument> _documents = [];
     private WorkspaceService? _workspace;
@@ -64,11 +65,47 @@ public partial class MainWindow : Window
                 CodeEditor.NavigateToString("<html><body style='background:#1e1e1e;color:#ddd;font:14px Segoe UI;padding:28px'><h2>Monaco n’est pas encore généré</h2><p>Exécutez npm ci puis npm run build dans WebEditor.</p></body></html>");
             }
             await StartTerminalAsync("PowerShell 7");
+            await RestoreSessionAsync();
         }
         catch (Exception ex)
         {
             StatusMessage.Text = "WebView2 n’a pas pu démarrer";
             OutputPanel.AppendText(ex.Message + Environment.NewLine);
+        }
+    }
+
+    private async Task RestoreSessionAsync()
+    {
+        var session = _sessionService.Load();
+        if (!string.IsNullOrWhiteSpace(session.WorkspacePath) && Directory.Exists(session.WorkspacePath))
+        {
+            await OpenWorkspaceAsync(session.WorkspacePath);
+            foreach (var path in session.OpenFiles.Take(50))
+                if (File.Exists(path) && _workspace is not null && IsInsideWorkspace(path, _workspace.RootPath))
+                    await OpenDocumentAsync(path, pin: true);
+            var active = _documents.FirstOrDefault(document => string.Equals(document.Path, session.ActiveFile, StringComparison.OrdinalIgnoreCase));
+            if (active is not null)
+            {
+                _activeDocument = active;
+                RefreshTabs();
+                await SendDocumentAsync(active);
+            }
+        }
+    }
+
+    private void SaveSession()
+    {
+        try
+        {
+            _sessionService.Save(new WorkspaceSession(
+                _workspace?.RootPath,
+                _documents.Where(document => !string.IsNullOrWhiteSpace(document.Path) && File.Exists(document.Path))
+                    .Select(document => document.Path).Take(50).ToArray(),
+                _activeDocument?.Path));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            OutputPanel.AppendText("Session non enregistrée : " + ex.Message + Environment.NewLine);
         }
     }
 
