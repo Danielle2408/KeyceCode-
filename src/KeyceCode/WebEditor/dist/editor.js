@@ -282,6 +282,33 @@
           editor.focus();
           break;
         }
+        case "applyTextEdits": {
+          if (!editor || !Array.isArray(message.edits)) break;
+          const model = editor.getModel();
+          if (!model) break;
+          const edits = message.edits.map((edit) => {
+            const range = edit.range;
+            if (!range?.start || !range?.end || typeof edit.newText !== "string") return null;
+            return {
+              start: model.getOffsetAt({ lineNumber: range.start.line + 1, column: range.start.character + 1 }),
+              end: model.getOffsetAt({ lineNumber: range.end.line + 1, column: range.end.character + 1 }),
+              text: edit.newText
+            };
+          }).filter(Boolean).sort((a, b) => b.start - a.start);
+          editor.pushUndoStop();
+          for (const edit of edits) {
+            const range = {
+              startLineNumber: model.getPositionAt(edit.start).lineNumber,
+              startColumn: model.getPositionAt(edit.start).column,
+              endLineNumber: model.getPositionAt(edit.end).lineNumber,
+              endColumn: model.getPositionAt(edit.end).column
+            };
+            editor.executeEdits("lsp-format", [{ range, text: edit.text, forceMoveMarkers: true }]);
+          }
+          editor.pushUndoStop();
+          editor.focus();
+          break;
+        }
         case "setDiagnostics": {
           if (typeof message.id !== "string") break;
           const markers = Array.isArray(message.markers) ? message.markers : [];

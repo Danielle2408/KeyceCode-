@@ -393,6 +393,26 @@ public partial class MainWindow : Window
                 var language = ReadString(root, "language") ?? "plaintext";
                 if (language is "json" or "javascript" or "typescript" or "html" or "css" or "scss")
                     await PostEditorMessageAsync(new { type = "executeCommand", command = "formatDocument" });
+                else if (language == "csharp" && _languageServer is { IsInitialized: true } server &&
+                         FindDocument(root) is { } document && _lspDocumentUris.TryGetValue(document.Id, out var uri))
+                {
+                    try
+                    {
+                        var edits = await server.RequestAsync("textDocument/formatting", new
+                        {
+                            textDocument = new { uri = uri.AbsoluteUri },
+                            options = new { tabSize = _editorPreferences.TabSize, insertSpaces = _editorPreferences.InsertSpaces }
+                        });
+                        if (edits.ValueKind == JsonValueKind.Array && edits.GetArrayLength() > 0)
+                            await PostEditorMessageAsync(new { type = "applyTextEdits", edits });
+                        else StatusMessage.Text = "Le serveur n’a proposé aucun changement de formatage.";
+                    }
+                    catch (Exception ex)
+                    {
+                        StatusMessage.Text = "Formatage C# indisponible via le serveur LSP.";
+                        OutputPanel.AppendText("[LSP] Formatage : " + ex.Message + Environment.NewLine);
+                    }
+                }
                 else StatusMessage.Text = $"Aucun formateur configuré pour {language}";
             }
             else if (type == "command") await HandleEditorCommandAsync(ReadString(root, "command"));
