@@ -200,13 +200,14 @@ public partial class MainWindow
 
     private void Debug_Click(object sender, RoutedEventArgs e)
     {
-        ShowPanel("DebugConsole");
-        DebugConsolePanel.Text = "Aucun adaptateur de débogage DAP n’est configuré. Le lancement F5 est indisponible tant qu’un adaptateur de langage n’est pas installé.";
-        StatusMessage.Text = "Adaptateur DAP manquant";
+        ShowRun_Click(sender, e);
+        if (_debugClient is not null) DebugContinue_Click(sender, e);
+        else DebugStart_Click(sender, e);
     }
 
     private async void StopRun_Click(object sender, RoutedEventArgs e)
     {
+        if (_debugClient is not null) { await StopDebugSessionAsync(terminateDebuggee: true); return; }
         try { if (_terminalSession is not null) await _terminalSession.SendCtrlCAsync(); }
         catch (Exception ex) { OutputPanel.AppendText(ex.Message + Environment.NewLine); }
     }

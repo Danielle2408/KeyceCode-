@@ -65,6 +65,7 @@ public partial class MainWindow : Window
     private async void MainWindow_Closed(object? sender, EventArgs e)
     {
         _autoSaveTimer.Stop();
+        await StopDebugSessionAsync(terminateDebuggee: true);
         await StopTerminalSessionAsync();
         foreach (var request in _geminiInlineRequests.Values) request.Cancel();
         _geminiInlineRequests.Clear();
