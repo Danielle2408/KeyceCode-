@@ -34,8 +34,42 @@ public partial class MainWindow
             await RefreshGitAsync();
             await ConfigureLanguageServerAsync(_workspace.RootPath);
             ShowView("Explorer");
+            _recentWorkspaces = WorkspaceSessionService.AddRecentWorkspace(_recentWorkspaces, _workspace.RootPath);
+            RefreshRecentWorkspacesMenu();
+            SaveSession();
         }
         catch (Exception ex) { ShowError(ex); }
+    }
+
+    private void RefreshRecentWorkspacesMenu()
+    {
+        RecentWorkspacesMenu.Items.Clear();
+        var workspaces = WorkspaceSessionService.NormalizeRecentWorkspaces(_recentWorkspaces);
+        _recentWorkspaces = workspaces;
+        if (workspaces.Count == 0)
+            RecentWorkspacesMenu.Items.Add(new MenuItem { Header = "Aucun dossier récent", IsEnabled = false });
+        else
+        {
+            foreach (var path in workspaces)
+            {
+                var label = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+                var item = new MenuItem { Header = string.IsNullOrWhiteSpace(label) ? path : label, ToolTip = path };
+                item.Click += async (_, _) => await OpenWorkspaceAsync(path);
+                RecentWorkspacesMenu.Items.Add(item);
+            }
+        }
+        RecentWorkspacesMenu.Items.Add(new Separator());
+        var clear = new MenuItem { Header = "Effacer les dossiers récents", IsEnabled = workspaces.Count > 0 };
+        clear.Click += (_, _) => ClearRecentWorkspaces_Click();
+        RecentWorkspacesMenu.Items.Add(clear);
+    }
+
+    private void ClearRecentWorkspaces_Click()
+    {
+        _recentWorkspaces = [];
+        RefreshRecentWorkspacesMenu();
+        SaveSession();
+        StatusMessage.Text = "Historique des dossiers récents effacé";
     }
 
     private async Task RefreshExplorerAsync()

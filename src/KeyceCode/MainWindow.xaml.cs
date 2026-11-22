@@ -36,6 +36,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, TaskCompletionSource<string?>> _pendingFormatOnSave = new(StringComparer.Ordinal);
     private LanguageServerHost? _languageServer;
     private WorkspaceService? _workspace;
+    private IReadOnlyList<string> _recentWorkspaces = [];
     private EditorDocument? _activeDocument;
     private string _activePanel = "Terminal";
     private string? _selectedText;
@@ -578,6 +579,8 @@ public partial class MainWindow : Window
     private async Task RestoreSessionAsync()
     {
         var session = _sessionService.Load();
+        _recentWorkspaces = session.RecentWorkspaces ?? [];
+        RefreshRecentWorkspacesMenu();
         if (!string.IsNullOrWhiteSpace(session.WorkspacePath) && Directory.Exists(session.WorkspacePath))
         {
             await OpenWorkspaceAsync(session.WorkspacePath);
@@ -643,7 +646,8 @@ public partial class MainWindow : Window
                 _workspace?.RootPath,
                 _documents.Where(document => !string.IsNullOrWhiteSpace(document.Path) && File.Exists(document.Path))
                     .Select(document => document.Path).Take(50).ToArray(),
-                _activeDocument?.Path));
+                _activeDocument?.Path,
+                _recentWorkspaces));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
