@@ -23,6 +23,9 @@ public partial class MainWindow : Window
     private bool _navigatingHistory;
     private readonly Dictionary<string, Uri> _lspDocumentUris = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, LspDiagnostics> _lspDiagnostics = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<ConPtySession, BuildOutputDiagnosticParser> _buildOutputParsers = [];
+    private readonly Dictionary<ConPtySession, string> _buildOutputWorkingDirectories = [];
+    private readonly List<LanguageProblem> _buildProblems = [];
     private readonly StringBuilder _terminalPendingOutput = new();
     private readonly TaskCompletionSource<bool> _terminalReadySignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private ConPtySession? _terminalSession;
@@ -214,17 +217,21 @@ public partial class MainWindow : Window
     private void RefreshLanguageProblems()
     {
         ProblemsPanel.Items.Clear();
+        var problems = new List<LanguageProblem>();
         foreach (var (path, diagnostics) in _lspDiagnostics)
         {
             var relativePath = _workspace is not null && IsInsideWorkspace(path, _workspace.RootPath)
                 ? Path.GetRelativePath(_workspace.RootPath, path)
                 : path;
             foreach (var diagnostic in diagnostics.Items)
-                ProblemsPanel.Items.Add(new LanguageProblem(diagnostic.Severity, diagnostic.Message, relativePath,
-                    diagnostic.Range.StartLine + 1));
+                problems.Add(new LanguageProblem(diagnostic.Severity, diagnostic.Message, relativePath,
+                    diagnostic.Range.StartLine + 1, diagnostic.Range.StartCharacter + 1, diagnostic.Code, path));
         }
-        StatusErrors.Content = $"× {_lspDiagnostics.Values.Sum(d => d.Items.Count(item => item.Severity == "Error"))}";
-        StatusWarnings.Content = $"⚠ {_lspDiagnostics.Values.Sum(d => d.Items.Count(item => item.Severity == "Warning"))}";
+        problems.AddRange(_buildProblems);
+        var distinct = problems.DistinctBy(problem => (problem.FullPath, problem.Line, problem.Column, problem.Code, problem.Message));
+        foreach (var problem in distinct) ProblemsPanel.Items.Add(problem);
+        StatusErrors.Content = $"× {distinct.Count(problem => problem.Severity.Equals("Error", StringComparison.OrdinalIgnoreCase))}";
+        StatusWarnings.Content = $"⚠ {distinct.Count(problem => problem.Severity.Equals("Warning", StringComparison.OrdinalIgnoreCase))}";
     }
 
     private async Task ApplyDiagnosticsForDocumentAsync(EditorDocument document)
@@ -456,7 +463,8 @@ public partial class MainWindow : Window
         }
     }
 
-    private sealed record LanguageProblem(string Severity, string Message, string File, int Line);
+    private sealed record LanguageProblem(string Severity, string Message, string File, int Line,
+        int Column = 1, string? Code = null, string? FullPath = null);
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {

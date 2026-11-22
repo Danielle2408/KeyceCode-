@@ -122,6 +122,26 @@ public partial class MainWindow
         await PostEditorMessageAsync(new { type = "executeCommand", command = "editor.action.gotoLine", args = match.Line });
     }
 
+    private async void ProblemsPanel_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (ProblemsPanel.SelectedItem is not LanguageProblem problem) return;
+        var path = problem.FullPath;
+        if (string.IsNullOrWhiteSpace(path) && _workspace is not null)
+            path = Path.GetFullPath(Path.Combine(_workspace.RootPath, problem.File));
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            StatusMessage.Text = "Le fichier du problème n’est plus disponible.";
+            return;
+        }
+        if (_workspace is not null && !IsInsideWorkspace(path, _workspace.RootPath))
+        {
+            StatusMessage.Text = "Ce problème pointe hors de l’espace de travail.";
+            return;
+        }
+        await OpenDocumentAsync(path, pin: true);
+        await PostEditorMessageAsync(new { type = "executeCommand", command = "editor.action.gotoLine", args = problem.Line });
+    }
+
     private async void NewTerminal_Click(object sender, RoutedEventArgs e)
     {
         ShowPanel("Terminal");
@@ -182,6 +202,20 @@ public partial class MainWindow
     {
         var tab = _terminalTabs.Values.FirstOrDefault(candidate => ReferenceEquals(candidate.Session, session));
         if (tab is not null) WriteTerminalOutput(tab, text);
+        if (!_buildOutputParsers.TryGetValue(session, out var parser)) return;
+        foreach (var diagnostic in parser.Append(text))
+        {
+            var workingDirectory = _buildOutputWorkingDirectories.GetValueOrDefault(session) ?? _workspace?.RootPath ?? Environment.CurrentDirectory;
+            string? fullPath = null;
+            try { fullPath = Path.GetFullPath(diagnostic.File, workingDirectory); }
+            catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException) { }
+            var displayPath = fullPath is not null && _workspace is not null && IsInsideWorkspace(fullPath, _workspace.RootPath)
+                ? Path.GetRelativePath(_workspace.RootPath, fullPath)
+                : diagnostic.File;
+            _buildProblems.Add(new LanguageProblem(diagnostic.Severity, diagnostic.Message, displayPath,
+                diagnostic.Line, diagnostic.Column, diagnostic.Code, fullPath));
+        }
+        if (_buildProblems.Count > 0) RefreshLanguageProblems();
     }
 
     private void AppendPendingTerminalOutput(string text)
@@ -277,7 +311,10 @@ public partial class MainWindow
             return;
         }
 
-        await RunInIntegratedTerminalAsync(command, Path.GetDirectoryName(path)!, $"Compilation : {Path.GetFileName(target.Length == 0 ? path : target)}");
+        var buildTarget = target.Length == 0 ? path : target;
+        var buildDirectory = Path.GetDirectoryName(buildTarget) ?? Path.GetDirectoryName(path)!;
+        await RunInIntegratedTerminalAsync(command, buildDirectory,
+            $"Compilation : {Path.GetFileName(buildTarget)}", captureBuildOutput: true);
     }
 
     private string? FindNearestProject(string sourcePath, string extension)
@@ -304,13 +341,23 @@ public partial class MainWindow
         return null;
     }
 
-    private async Task RunInIntegratedTerminalAsync(string command, string workingDirectory, string status)
+    private async Task RunInIntegratedTerminalAsync(string command, string workingDirectory, string status,
+        bool captureBuildOutput = false)
     {
         try
         {
             ShowPanel("Terminal");
             if (_terminalSession is null || _terminalSession.Completion.IsCompleted)
                 await StartTerminalAsync(_activeTerminalProfile ?? "PowerShell 7");
+            if (captureBuildOutput && _terminalSession is { } buildSession)
+            {
+                _buildOutputParsers.Clear();
+                _buildOutputWorkingDirectories.Clear();
+                _buildOutputParsers[buildSession] = new BuildOutputDiagnosticParser();
+                _buildOutputWorkingDirectories[buildSession] = workingDirectory;
+                _buildProblems.Clear();
+                RefreshLanguageProblems();
+            }
             var isCmd = _activeTerminalProfile == "Invite de commandes";
             var line = isCmd
                 ? $"cd /d {QuoteCmd(workingDirectory)} && {command}\r"
