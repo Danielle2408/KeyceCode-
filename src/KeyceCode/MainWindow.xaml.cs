@@ -22,6 +22,10 @@ public partial class MainWindow : Window
     private bool _navigatingHistory;
     private readonly Dictionary<string, Uri> _lspDocumentUris = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, LspDiagnostics> _lspDiagnostics = new(StringComparer.OrdinalIgnoreCase);
+    private readonly StringBuilder _terminalPendingOutput = new();
+    private readonly TaskCompletionSource<bool> _terminalReadySignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private ConPtySession? _terminalSession;
+    private bool _terminalReady;
     private readonly Dictionary<string, CancellationTokenSource> _lspNavigationRequests = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CancellationTokenSource> _geminiInlineRequests = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (int Version, int Offset)> _editorSnapshots = new(StringComparer.Ordinal);
@@ -46,9 +50,8 @@ public partial class MainWindow : Window
         _editorPreferences = _preferencesService.Load();
         FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
         _autoSaveTimer.Tick += AutoSaveTimer_Tick;
-        TerminalSessions.Items.Add("PowerShell");
+        TerminalSessions.Items.Add("PowerShell 7");
         TerminalSessions.SelectedIndex = 0;
-        TerminalOutput.Text = "KeyceCode integrated terminal\r\n";
         OutputPanel.Text = "KeyceCode output\r\n";
         Loaded += MainWindow_Loaded;
         Closed += MainWindow_Closed;
@@ -56,12 +59,14 @@ public partial class MainWindow : Window
         {
             StatusMessage.Text = $"Thème appliqué : {theme.DisplayName}";
             _ = PostEditorMessageAsync(new { type = "setTheme", theme = MonacoTheme(theme.Id) });
+            PostTerminalMessage(new { type = "setTheme", theme = TerminalTheme(theme.Id) });
         };
     }
 
     private async void MainWindow_Closed(object? sender, EventArgs e)
     {
         _autoSaveTimer.Stop();
+        await StopTerminalSessionAsync();
         foreach (var request in _geminiInlineRequests.Values) request.Cancel();
         _geminiInlineRequests.Clear();
         _gemini.Dispose();
@@ -463,17 +468,19 @@ public partial class MainWindow : Window
             CodeEditor.CoreWebView2.Settings.AreDevToolsEnabled = System.Diagnostics.Debugger.IsAttached;
             CodeEditor.CoreWebView2.WebMessageReceived += Editor_WebMessageReceived;
             var editorRoot = Path.Combine(AppContext.BaseDirectory, "WebEditor", "dist");
-            if (File.Exists(Path.Combine(editorRoot, "index.html")))
+            if (File.Exists(Path.Combine(editorRoot, "index.html")) || File.Exists(Path.Combine(editorRoot, "terminal.html")))
             {
                 CodeEditor.CoreWebView2.SetVirtualHostNameToFolderMapping("keyce.local", editorRoot, CoreWebView2HostResourceAccessKind.DenyCors);
-                CodeEditor.CoreWebView2.Navigate("https://keyce.local/index.html");
+                if (File.Exists(Path.Combine(editorRoot, "index.html"))) CodeEditor.CoreWebView2.Navigate("https://keyce.local/index.html");
+                else CodeEditor.NavigateToString("<html><body>Monaco n’est pas encore généré.</body></html>");
             }
             else
             {
                 CodeEditor.NavigateToString("<html><body style='background:#1e1e1e;color:#ddd;font:14px Segoe UI;padding:28px'><h2>Monaco n’est pas encore généré</h2><p>Exécutez npm ci puis npm run build dans WebEditor.</p></body></html>");
             }
-            await StartTerminalAsync("PowerShell 7");
+            await InitializeTerminalWebViewAsync(editorRoot);
             await RestoreSessionAsync();
+            await StartTerminalAsync(TerminalSessions.SelectedItem?.ToString() ?? "PowerShell 7");
         }
         catch (Exception ex)
         {
@@ -481,6 +488,92 @@ public partial class MainWindow : Window
             OutputPanel.AppendText(ex.Message + Environment.NewLine);
         }
     }
+
+    private async Task InitializeTerminalWebViewAsync(string editorRoot)
+    {
+        await TerminalWebView.EnsureCoreWebView2Async();
+        TerminalWebView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
+        TerminalWebView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+        TerminalWebView.CoreWebView2.Settings.AreDevToolsEnabled = System.Diagnostics.Debugger.IsAttached;
+        TerminalWebView.CoreWebView2.WebMessageReceived += TerminalWebView_WebMessageReceived;
+        if (File.Exists(Path.Combine(editorRoot, "terminal.html")))
+            TerminalWebView.CoreWebView2.SetVirtualHostNameToFolderMapping("keyce.local", editorRoot, CoreWebView2HostResourceAccessKind.DenyCors);
+        var terminalPage = Path.Combine(editorRoot, "terminal.html");
+        if (File.Exists(terminalPage)) TerminalWebView.CoreWebView2.Navigate("https://keyce.local/terminal.html");
+        else
+        {
+            TerminalWebView.NavigateToString("<html><body style='background:#181818;color:#ddd;font:14px Segoe UI;padding:24px'>Ressources xterm manquantes. Exécutez npm ci puis npm run build dans WebEditor.</body></html>");
+            StatusMessage.Text = "Client xterm non généré";
+        }
+    }
+
+    private async void TerminalWebView_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = json.RootElement;
+            var type = ReadString(root, "type");
+            if (type == "ready")
+            {
+                _terminalReady = true;
+                _terminalReadySignal.TrySetResult(true);
+                var theme = ((App)Application.Current).ThemeService.CurrentTheme;
+                PostTerminalMessage(new { type = "setTheme", theme = TerminalTheme(theme.Id) });
+                if (_terminalPendingOutput.Length > 0)
+                {
+                    PostTerminalMessage(new { type = "write", data = _terminalPendingOutput.ToString() });
+                    _terminalPendingOutput.Clear();
+                }
+                if (_terminalSession is not null && TryReadDimensions(root, out var cols, out var rows))
+                {
+                    try { _terminalSession.Resize(cols, rows); }
+                    catch (InvalidOperationException) { }
+                }
+            }
+            else if (type == "input")
+            {
+                var data = ReadString(root, "data");
+                if (data is not null && _terminalSession is not null) await _terminalSession.SendInputAsync(data);
+            }
+            else if (type == "resize")
+            {
+                if (_terminalSession is not null && TryReadDimensions(root, out var cols, out var rows))
+                {
+                    try { _terminalSession.Resize(cols, rows); }
+                    catch (InvalidOperationException) { }
+                    catch (System.Runtime.InteropServices.COMException ex) { StatusMessage.Text = "Redimensionnement ConPTY impossible : " + ex.Message; }
+                }
+            }
+            else if (type == "closed")
+            {
+                _terminalReady = false;
+                await StopTerminalSessionAsync();
+            }
+            else if (type == "terminalError")
+            {
+                var message = ReadString(root, "message") ?? "Erreur xterm inconnue.";
+                OutputPanel.AppendText("[Terminal] " + message + Environment.NewLine);
+                StatusMessage.Text = "Erreur du client xterm";
+            }
+        }
+        catch (Exception ex) { OutputPanel.AppendText("[Terminal] Message xterm invalide : " + ex.Message + Environment.NewLine); }
+    }
+
+    private void PostTerminalMessage(object message)
+    {
+        if (!_terminalReady || TerminalWebView.CoreWebView2 is null) return;
+        TerminalWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message));
+    }
+
+    private static bool TryReadDimensions(JsonElement root, out int columns, out int rows)
+    {
+        columns = ReadInt(root, "cols", 0);
+        rows = ReadInt(root, "rows", 0);
+        return columns is > 0 and <= short.MaxValue && rows is > 0 and <= short.MaxValue;
+    }
+
+    private static string TerminalTheme(string id) => id is "light-plus" or "light-high-contrast" ? "light" : "dark";
 
     private async Task RestoreSessionAsync()
     {
@@ -815,6 +908,7 @@ public partial class MainWindow : Window
 
     private static string MonacoTheme(string id) => id switch
     {
+        "dark-plus" => "vs-dark",
         "keyce-night" => "keyce-brand-night",
         "light-plus" => "vs",
         "dark-high-contrast" => "hc-black",

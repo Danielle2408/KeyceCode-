@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.IO;
+using Microsoft.Win32;
 using KeyceCode.Services;
 
 namespace KeyceCode;
@@ -77,11 +78,11 @@ public partial class MainWindow
 
     private void ClearPanel_Click(object sender, RoutedEventArgs e)
     {
-        if (_activePanel == "Terminal") TerminalOutput.Clear();
+        if (_activePanel == "Terminal") PostTerminalMessage(new { type = "clear" });
         else if (_activePanel == "Output") OutputPanel.Clear();
         else if (_activePanel == "DebugConsole") DebugConsolePanel.Clear();
     }
-    private void ClearTerminal_Click(object sender, RoutedEventArgs e) => TerminalOutput.Clear();
+    private void ClearTerminal_Click(object sender, RoutedEventArgs e) => PostTerminalMessage(new { type = "clear" });
 
     private async void Undo_Click(object sender, RoutedEventArgs e) => await PostEditorMessageAsync(new { type = "executeCommand", command = "undo" });
     private async void Redo_Click(object sender, RoutedEventArgs e) => await PostEditorMessageAsync(new { type = "executeCommand", command = "redo" });
@@ -144,6 +145,45 @@ public partial class MainWindow
         {
             var selected = service.Themes.FirstOrDefault(t => t.DisplayName == theme);
             if (selected is not null) service.SetTheme(Application.Current, selected.Id);
+        }
+    }
+
+    private async void ImportVsCodeConfiguration_Click(object sender, RoutedEventArgs e)
+    {
+        var settingsPath = VsCodeConfigurationImporter.DefaultSettingsPath;
+        if (!File.Exists(settingsPath))
+        {
+            var dialog = new OpenFileDialog
+            {
+                Title = "Choisir le settings.json de Visual Studio Code",
+                Filter = "Paramètres VS Code (settings.json)|settings.json|Fichiers JSON (*.json)|*.json|Tous les fichiers (*.*)|*.*",
+                InitialDirectory = Path.GetDirectoryName(settingsPath),
+                FileName = "settings.json",
+                CheckFileExists = true
+            };
+            if (dialog.ShowDialog(this) != true) return;
+            settingsPath = dialog.FileName;
+        }
+
+        try
+        {
+            var imported = VsCodeConfigurationImporter.Import(settingsPath, _editorPreferences);
+            _editorPreferences = imported.Preferences;
+            _preferencesService.Save(_editorPreferences);
+            FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
+            if (imported.ThemeId is { } themeId)
+                ((App)Application.Current).ThemeService.SetTheme(Application.Current, themeId);
+            await SendEditorOptionsAsync();
+            StatusMessage.Text = "Préférences VS Code importées";
+            MessageBox.Show(this,
+                $"Préférences compatibles importées depuis :\n{imported.SourcePath}\n\n" +
+                $"{imported.ExtensionCount} extension(s) VS Code détectée(s). KeyceCode peut les télécharger depuis Open VSX lorsqu’elles y sont publiées, mais ne les exécute pas encore : l’hôte d’extensions VS Code n’est pas disponible. Les raccourcis clavier personnalisés et extensions non prises en charge ne sont pas appliqués.",
+                "Import Visual Studio Code", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException)
+        {
+            MessageBox.Show(this, "Impossible d’importer cette configuration VS Code : " + ex.Message,
+                "Import Visual Studio Code", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 

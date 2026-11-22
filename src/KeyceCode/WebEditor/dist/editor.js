@@ -10,8 +10,11 @@
   let suppressChanges = false;
   let contentTimer = 0;
   const models = new Map();
+  const modelPathsByUri = new Map();
+  const modelIdsByUri = new Map();
   const documentMarkers = new Map();
   const pendingCompletions = new Map();
+  const pendingNavigation = new Map();
   const pendingAiCompletions = new Map();
   let completionSequence = 0;
   let aiCompletionEnabled = false;
@@ -140,6 +143,11 @@
     });
 
     editor.onDidChangeModelContent(notifyContentChanged);
+    editor.onDidChangeModel(() => {
+      const model = editor.getModel();
+      const path = model && modelPathsByUri.get(model.uri.toString());
+      if (path) post({ type: "lspModelActivated", path });
+    });
     editor.onDidChangeCursorSelection((event) => {
       cancelAiCompletions();
       if (!activeDocument.id) return;
@@ -210,6 +218,36 @@
               triggerKind: context.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter ? 2 : 1,
               triggerCharacter: context.triggerCharacter || null
             });
+          });
+        }
+      });
+
+      monaco.languages.registerDefinitionProvider(language, {
+        provideDefinition(model, position, token) {
+          return requestNavigation("definition", model, position, token).then((result) =>
+            (result?.locations || []).map((location) => makeNavigationLocation(monaco, location)).filter(Boolean));
+        }
+      });
+
+      monaco.languages.registerReferenceProvider(language, {
+        provideReferences(model, position, context, token) {
+          return requestNavigation("references", model, position, token).then((result) =>
+            (result?.locations || []).map((location) => makeNavigationLocation(monaco, location)).filter(Boolean));
+        }
+      });
+
+      monaco.languages.registerHoverProvider(language, {
+        provideHover(model, position, token) {
+          return requestNavigation("hover", model, position, token).then((result) => {
+            const contentsValue = result?.hover?.contents;
+            if (!contentsValue) return null;
+            const rawContents = Array.isArray(contentsValue) ? contentsValue : [contentsValue];
+            const contents = rawContents.map((entry) => {
+              if (typeof entry === "string") return { value: entry };
+              if (entry && typeof entry.value === "string") return { value: entry.value };
+              return null;
+            }).filter(Boolean);
+            return contents.length ? { contents } : null;
           });
         }
       });
@@ -305,6 +343,76 @@
     });
   }
 
+  function requestNavigation(operation, model, position, token) {
+    if (!vscode) return Promise.resolve({ locations: [] });
+    const key = model.uri.toString();
+    const path = modelPathsByUri.get(key);
+    const id = modelIdsByUri.get(key);
+    if (!path || !id) return Promise.resolve({ locations: [] });
+    const requestId = `lsp-nav-${++completionSequence}`;
+    return new Promise((resolve) => {
+      let cancellationSubscription;
+      const timer = window.setTimeout(() => {
+        pendingNavigation.delete(requestId);
+        cancellationSubscription?.dispose();
+        post({ type: "lspNavigationCancel", requestId });
+        resolve({ locations: [] });
+      }, 11000);
+      cancellationSubscription = token.onCancellationRequested(() => {
+        window.clearTimeout(timer);
+        cancellationSubscription.dispose();
+        pendingNavigation.delete(requestId);
+        post({ type: "lspNavigationCancel", requestId });
+        resolve({ locations: [] });
+      });
+      pendingNavigation.set(requestId, (message) => {
+        window.clearTimeout(timer);
+        cancellationSubscription.dispose();
+        resolve(message);
+      });
+      post({
+        type: "lspNavigationRequest",
+        requestId,
+        operation,
+        id,
+        path,
+        line: position.lineNumber,
+        column: position.column
+      });
+    });
+  }
+
+  function makeNavigationLocation(monaco, location) {
+    if (!location || typeof location.path !== "string" || !location.path || typeof location.text !== "string") return null;
+    const uri = modelUri(location.path, `lsp-${location.path}`);
+    const key = uri.toString();
+    let model = models.get(key);
+    if (!model || model.isDisposed()) {
+      model = monaco.editor.createModel(location.text, languageForPath(location.path), uri);
+      models.set(key, model);
+    }
+    modelPathsByUri.set(key, location.workspacePath || location.path);
+    modelIdsByUri.set(key, `lsp:${location.workspacePath || location.path}`);
+    return {
+      uri,
+      range: {
+        startLineNumber: Math.max(1, Number(location.startLine) + 1),
+        startColumn: Math.max(1, Number(location.startCharacter) + 1),
+        endLineNumber: Math.max(1, Number(location.endLine) + 1),
+        endColumn: Math.max(1, Number(location.endCharacter) + 1)
+      }
+    };
+  }
+
+  function languageForPath(path) {
+    const extension = String(path).split(".").pop()?.toLowerCase();
+    return ({
+      cs: "csharp", js: "javascript", jsx: "javascriptreact", ts: "typescript", tsx: "typescriptreact",
+      json: "json", jsonc: "jsonc", html: "html", htm: "html", css: "css", scss: "scss",
+      py: "python", ps1: "powershell", go: "go", rs: "rust", java: "java", cpp: "cpp", cc: "cpp", h: "cpp", hpp: "cpp"
+    })[extension] || "plaintext";
+  }
+
   function cancelAiCompletions() {
     for (const [requestId, resolve] of pendingAiCompletions) {
       post({ type: "geminiInlineCompletionCancel", requestId });
@@ -328,6 +436,8 @@
         model.setValue(String(message.text));
       }
       monaco.editor.setModelLanguage(model, message.language || "plaintext");
+      modelPathsByUri.set(key, message.path || "");
+      modelIdsByUri.set(key, id);
       editor.setModel(model);
       cancelAiCompletions();
       activeDocument = {
@@ -439,6 +549,14 @@
           const resolve = pendingCompletions.get(message.requestId);
           if (resolve) {
             pendingCompletions.delete(message.requestId);
+            resolve(message);
+          }
+          break;
+        }
+        case "lspNavigationResult": {
+          const resolve = pendingNavigation.get(message.requestId);
+          if (resolve) {
+            pendingNavigation.delete(message.requestId);
             resolve(message);
           }
           break;

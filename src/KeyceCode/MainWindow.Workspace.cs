@@ -546,8 +546,6 @@ public partial class MainWindow
         {
             SaveSession();
             _gemini.Dispose();
-            try { if (_terminalProcess is { HasExited: false }) _terminalProcess.Kill(entireProcessTree: true); }
-            catch (InvalidOperationException) { }
         }
     }
 }

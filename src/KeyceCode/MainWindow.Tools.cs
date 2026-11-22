@@ -10,7 +10,7 @@ namespace KeyceCode;
 
 public partial class MainWindow
 {
-    private Process? _terminalProcess;
+    private string? _activeTerminalProfile;
 
     private async void SearchQuery_KeyDown(object sender, KeyEventArgs e)
     {
@@ -71,68 +71,141 @@ public partial class MainWindow
     private async void NewTerminal_Click(object sender, RoutedEventArgs e)
     {
         ShowPanel("Terminal");
-        var profile = TerminalSessions.SelectedItem?.ToString() ?? "PowerShell";
+        var profile = TerminalSessions.SelectedItem?.ToString() ?? "PowerShell 7";
         await StartTerminalAsync(profile);
-        TerminalInput.Focus();
+        PostTerminalMessage(new { type = "focus" });
     }
 
-    private void SelectTerminalProfile_Click(object sender, RoutedEventArgs e)
+    private async void SelectTerminalProfile_Click(object sender, RoutedEventArgs e)
     {
         var profile = QuickPickWindow.Show(this, "Sélectionner le profil du terminal", new[] { "PowerShell 7", "Windows PowerShell", "Invite de commandes" });
         if (profile is not null)
         {
             if (!TerminalSessions.Items.Contains(profile)) TerminalSessions.Items.Add(profile);
             TerminalSessions.SelectedItem = profile;
-            _ = StartTerminalAsync(profile);
+            if (_activeTerminalProfile == profile && (_terminalSession is null || _terminalSession.Completion.IsCompleted))
+                await StartTerminalAsync(profile);
         }
+    }
+
+    private async void TerminalSessions_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded || TerminalSessions.SelectedItem is not string profile || profile == _activeTerminalProfile) return;
+        await StartTerminalAsync(profile);
     }
 
     private async Task StartTerminalAsync(string profile)
     {
-        if (_terminalProcess is { HasExited: false } existing)
+        if (!_terminalReady)
         {
-            try { existing.StandardInput.WriteLine("exit"); } catch (IOException) { }
-            await existing.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(2)).ContinueWith(_ => { });
-            existing.Dispose();
+            try { await _terminalReadySignal.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (TimeoutException) { StatusMessage.Text = "xterm n’a pas répondu; la sortie sera conservée jusqu’à son initialisation."; }
         }
-        var executable = profile switch
-        {
-            "Invite de commandes" => Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe",
-            "Windows PowerShell" => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"),
-            _ => FindExecutable("pwsh.exe") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe")
-        };
-        var info = new ProcessStartInfo(executable)
-        {
-            WorkingDirectory = _workspace?.RootPath ?? Environment.CurrentDirectory,
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        if (profile.Contains("PowerShell", StringComparison.OrdinalIgnoreCase))
-        {
-            info.ArgumentList.Add("-NoLogo"); info.ArgumentList.Add("-NoExit");
-        }
+        await StopTerminalSessionAsync();
+        _activeTerminalProfile = profile;
+        var isCmd = profile == "Invite de commandes";
+        var windowsPowerShell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
+        var executable = isCmd ? Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe"
+            : profile == "Windows PowerShell" ? windowsPowerShell
+            : FindExecutable("pwsh.exe") ?? windowsPowerShell;
+        IReadOnlyList<string> arguments = isCmd ? ["/D"] : ["-NoLogo", "-NoExit"];
+        var workingDirectory = _workspace?.RootPath ?? Environment.CurrentDirectory;
         try
         {
-            _terminalProcess = new Process { StartInfo = info, EnableRaisingEvents = true };
-            _terminalProcess.OutputDataReceived += (_, args) => AppendTerminalLine(args.Data);
-            _terminalProcess.ErrorDataReceived += (_, args) => AppendTerminalLine(args.Data);
-            _terminalProcess.Exited += (_, _) => Dispatcher.Invoke(() => TerminalOutput.AppendText("\r\n[session terminée]" + Environment.NewLine));
-            _terminalProcess.Start();
-            _terminalProcess.BeginOutputReadLine(); _terminalProcess.BeginErrorReadLine();
-            TerminalOutput.AppendText($"\r\n[{profile} démarré dans {_terminalProcess.StartInfo.WorkingDirectory}]\r\n");
+            var session = await ConPtySession.StartAsync(executable, arguments, workingDirectory, columns: 120, rows: 30);
+            _terminalSession = session;
+            await Dispatcher.InvokeAsync(() => QueueOrWriteTerminal(session,
+                $"\r\n\u001b[90m[{profile} démarré dans {workingDirectory}]\u001b[0m\r\n"));
+            _ = PumpTerminalOutputAsync(session);
+            _ = MonitorTerminalExitAsync(session, profile);
             StatusMessage.Text = $"Terminal : {profile}";
         }
-        catch (Exception ex) { TerminalOutput.AppendText("Impossible de démarrer le terminal : " + ex.Message + "\r\n"); }
-        await Task.CompletedTask;
+        catch (Exception ex)
+        {
+            var message = "Impossible de démarrer le terminal : " + ex.Message + Environment.NewLine;
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (_terminalReady) PostTerminalMessage(new { type = "write", data = message });
+                else AppendPendingTerminalOutput(message);
+                StatusMessage.Text = "Échec du démarrage ConPTY";
+            });
+        }
     }
 
-    private void AppendTerminalLine(string? line)
+    private async Task StopTerminalSessionAsync()
     {
-        if (line is null) return;
-        Dispatcher.BeginInvoke(() => { TerminalOutput.AppendText(line + Environment.NewLine); TerminalOutput.ScrollToEnd(); });
+        var session = _terminalSession;
+        _terminalSession = null;
+        if (session is null) return;
+        try { await session.DisposeAsync(); }
+        catch (Exception ex) { OutputPanel.AppendText("Arrêt ConPTY : " + ex.Message + Environment.NewLine); }
+    }
+
+    private async Task PumpTerminalOutputAsync(ConPtySession session)
+    {
+        try
+        {
+            await foreach (var output in session.Output.ReadAllAsync())
+                await Dispatcher.InvokeAsync(() => QueueOrWriteTerminal(session, output));
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (ReferenceEquals(session, _terminalSession))
+                    OutputPanel.AppendText("[ConPTY output] " + ex.Message + Environment.NewLine);
+            });
+        }
+    }
+
+    private async Task MonitorTerminalExitAsync(ConPtySession session, string profile)
+    {
+        try
+        {
+            var exitCode = await session.Completion;
+            await session.Output.Completion;
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (ReferenceEquals(session, _terminalSession))
+                    QueueOrWriteTerminal(session, $"\r\n\u001b[90m[{profile} terminé · code {exitCode}]\u001b[0m\r\n");
+            });
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (ReferenceEquals(session, _terminalSession)) OutputPanel.AppendText("[ConPTY] " + ex.Message + Environment.NewLine);
+            });
+        }
+    }
+
+    private void QueueOrWriteTerminal(ConPtySession session, string text)
+    {
+        if (!ReferenceEquals(session, _terminalSession)) return;
+        if (_terminalReady) PostTerminalMessage(new { type = "write", data = text });
+        else AppendPendingTerminalOutput(text);
+    }
+
+    private void AppendPendingTerminalOutput(string text)
+    {
+        _terminalPendingOutput.Append(text);
+        const int maximumBufferedCharacters = 1_000_000;
+        if (_terminalPendingOutput.Length > maximumBufferedCharacters)
+            _terminalPendingOutput.Remove(0, _terminalPendingOutput.Length - maximumBufferedCharacters);
+    }
+
+    private async Task SendTerminalInputAsync(string text)
+    {
+        try
+        {
+            if (_terminalSession is null || _terminalSession.Completion.IsCompleted)
+                await StartTerminalAsync(TerminalSessions.SelectedItem?.ToString() ?? "PowerShell 7");
+            if (_terminalSession is not null) await _terminalSession.SendInputAsync(text);
+        }
+        catch (Exception ex)
+        {
+            OutputPanel.AppendText("[ConPTY input] " + ex.Message + Environment.NewLine);
+        }
     }
 
     private static string? FindExecutable(string name)
@@ -146,21 +219,6 @@ public partial class MainWindow
         return null;
     }
 
-    private async void TerminalInput_KeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Enter || string.IsNullOrWhiteSpace(TerminalInput.Text)) return;
-        var command = TerminalInput.Text; TerminalInput.Clear();
-        if (_terminalProcess is not { HasExited: false }) await StartTerminalAsync(TerminalSessions.SelectedItem?.ToString() ?? "PowerShell");
-        try
-        {
-            TerminalOutput.AppendText($"PS> {command}\r\n");
-            await _terminalProcess!.StandardInput.WriteLineAsync(command);
-            await _terminalProcess.StandardInput.FlushAsync();
-        }
-        catch (Exception ex) { TerminalOutput.AppendText(ex.Message + "\r\n"); }
-        e.Handled = true;
-    }
-
     private async void Run_Click(object sender, RoutedEventArgs e)
     {
         if (_activeDocument is null) { StatusMessage.Text = "Ouvrez un fichier ou projet avant de lancer."; return; }
@@ -170,24 +228,29 @@ public partial class MainWindow
         var extension = Path.GetExtension(path).ToLowerInvariant();
         var directory = Path.GetDirectoryName(path)!;
         string command;
-        if (extension == ".csproj") command = $"dotnet run --project {Quote(path)}";
-        else if (extension == ".sln" || extension == ".slnx") command = $"dotnet build {Quote(path)}";
-        else if (extension == ".py") command = $"python {Quote(path)}";
-        else if (extension is ".js" or ".mjs") command = $"node {Quote(path)}";
-        else if (extension == ".ps1") command = $"& {Quote(path)}";
-        else if (extension is ".bat" or ".cmd") command = $"& {Quote(path)}";
+        var isCmd = TerminalSessions.SelectedItem?.ToString() == "Invite de commandes";
+        string QuotePath(string value) => isCmd ? QuoteCmd(value) : Quote(value);
+        if (extension == ".csproj") command = $"dotnet run --project {QuotePath(path)}";
+        else if (extension == ".sln" || extension == ".slnx") command = $"dotnet build {QuotePath(path)}";
+        else if (extension == ".py") command = $"python {QuotePath(path)}";
+        else if (extension is ".js" or ".mjs") command = $"node {QuotePath(path)}";
+        else if (extension == ".ps1") command = isCmd ? $"powershell.exe -ExecutionPolicy Bypass -File {QuoteCmd(path)}" : $"& {Quote(path)}";
+        else if (extension is ".bat" or ".cmd") command = isCmd ? $"call {QuoteCmd(path)}" : $"& {Quote(path)}";
         else if (extension == ".cs" && _workspace is not null)
         {
             var project = Directory.EnumerateFiles(_workspace.RootPath, "*.csproj", SearchOption.AllDirectories)
                 .FirstOrDefault(file => !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) && !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
-            command = project is null ? "Write-Error 'Aucun fichier projet .csproj trouvé.'" : $"dotnet run --project {Quote(project)}";
+            command = project is null
+                ? isCmd ? "echo Aucun fichier projet .csproj trouve." : "Write-Error 'Aucun fichier projet .csproj trouvé.'"
+                : $"dotnet run --project {QuotePath(project)}";
         }
         else { StatusMessage.Text = $"Aucune commande Run configurée pour {extension}."; return; }
 
         ShowPanel("Terminal");
-        if (_terminalProcess is not { HasExited: false }) await StartTerminalAsync(TerminalSessions.SelectedItem?.ToString() ?? "PowerShell");
-        await _terminalProcess!.StandardInput.WriteLineAsync($"Set-Location {Quote(directory)}; {command}");
-        await _terminalProcess.StandardInput.FlushAsync();
+        if (_terminalSession is null || _terminalSession.Completion.IsCompleted)
+            await StartTerminalAsync(TerminalSessions.SelectedItem?.ToString() ?? "PowerShell 7");
+        var line = isCmd ? $"cd /d {QuoteCmd(directory)} && {command}\r" : $"Set-Location -LiteralPath {Quote(directory)}; {command}\r";
+        await SendTerminalInputAsync(line);
         StatusMessage.Text = $"Lancement : {Path.GetFileName(path)}";
     }
 
@@ -198,13 +261,14 @@ public partial class MainWindow
         StatusMessage.Text = "Adaptateur DAP manquant";
     }
 
-    private void StopRun_Click(object sender, RoutedEventArgs e)
+    private async void StopRun_Click(object sender, RoutedEventArgs e)
     {
-        try { if (_terminalProcess is { HasExited: false }) _terminalProcess.StandardInput.WriteLine("`u0003"); }
+        try { if (_terminalSession is not null) await _terminalSession.SendCtrlCAsync(); }
         catch (Exception ex) { OutputPanel.AppendText(ex.Message + Environment.NewLine); }
     }
 
     private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
+    private static string QuoteCmd(string value) => "\"" + value.Replace("%", "^%", StringComparison.Ordinal) + "\"";
 
     private async Task RefreshGitAsync()
     {
