@@ -28,7 +28,9 @@ public partial class MainWindow
         PanelRow.Height = layout.PanelVisible ? new GridLength(_rememberedPanelHeight) : new GridLength(0);
         PanelSplitter.Visibility = layout.PanelVisible ? Visibility.Visible : Visibility.Collapsed;
         _assistantVisible = layout.AssistantVisible;
+        AssistantSplitterColumn.Width = layout.AssistantVisible ? new GridLength(5) : new GridLength(0);
         SecondarySidebarColumn.Width = layout.AssistantVisible ? new GridLength(_rememberedAssistantWidth) : new GridLength(0);
+        AssistantGridSplitter.Visibility = layout.AssistantVisible ? Visibility.Visible : Visibility.Collapsed;
         if (layout.WindowMaximized) WindowState = WindowState.Maximized;
     }
 
@@ -71,7 +73,9 @@ public partial class MainWindow
         PanelRow.Height = new GridLength(_rememberedPanelHeight);
         PanelSplitter.Visibility = Visibility.Visible;
         _assistantVisible = false;
+        AssistantSplitterColumn.Width = new GridLength(0);
         SecondarySidebarColumn.Width = new GridLength(0);
+        AssistantGridSplitter.Visibility = Visibility.Collapsed;
         try
         {
             _layoutService.Save(CaptureWorkbenchLayout());

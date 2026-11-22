@@ -61,7 +61,9 @@ public partial class MainWindow
     {
         if (_assistantVisible && SecondarySidebarColumn.ActualWidth > 0) _rememberedAssistantWidth = SecondarySidebarColumn.ActualWidth;
         _assistantVisible = !_assistantVisible;
+        AssistantSplitterColumn.Width = _assistantVisible ? new GridLength(5) : new GridLength(0);
         SecondarySidebarColumn.Width = _assistantVisible ? new GridLength(_rememberedAssistantWidth) : new GridLength(0);
+        AssistantGridSplitter.Visibility = _assistantVisible ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ShowProblems_Click(object sender, RoutedEventArgs e) => ShowPanel("Problems");
