@@ -47,7 +47,7 @@ Les clés qui ont été collées dans la conversation doivent être révoquées 
 
 ## Configurer IntelliSense LSP
 
-KeyceCode ne télécharge ni ne fabrique un serveur de langage. Installez d’abord un serveur compatible LSP pour le langage souhaité, puis configurez son exécutable avant de lancer l’application :
+KeyceCode ne télécharge ni ne fabrique un serveur de langage. Installez d’abord un serveur compatible LSP pour le langage souhaité, puis configurez son exécutable et ses arguments dans **Paramètres → Serveur de langage (LSP)**. Une modification redémarre le serveur pour l’espace de travail courant. Les variables d’environnement restent disponibles comme solution de repli pour le développement :
 
 ```powershell
 $env:KEYCECODE_LSP_EXECUTABLE = 'C:\chemin\vers\votre-language-server.exe'

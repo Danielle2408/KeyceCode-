@@ -28,6 +28,10 @@ public sealed record EditorPreferences
     public bool GeminiInlineCompletionEnabled { get; init; }
     /// <summary>Optional Gemini Developer API model identifier; null follows GEMINI_MODEL/default.</summary>
     public string? GeminiModel { get; init; }
+    /// <summary>Optional language server executable path. Empty follows KEYCECODE_LSP_EXECUTABLE.</summary>
+    public string? LanguageServerExecutable { get; init; }
+    /// <summary>JSON array of language server arguments. Empty follows KEYCECODE_LSP_ARGS.</summary>
+    public string? LanguageServerArgumentsJson { get; init; }
 }
 
 /// <summary>Persists non-secret editor preferences in the current user's AppData directory.</summary>

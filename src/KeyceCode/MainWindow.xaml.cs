@@ -85,26 +85,26 @@ public partial class MainWindow : Window
     private async Task ConfigureLanguageServerAsync(string workspacePath)
     {
         await StopLanguageServerAsync();
-        var executable = Environment.GetEnvironmentVariable("KEYCECODE_LSP_EXECUTABLE");
-        if (string.IsNullOrWhiteSpace(executable))
-        {
-            StatusMessage.Text = "LSP non configuré · KEYCECODE_LSP_EXECUTABLE";
-            OutputPanel.AppendText("Language server désactivé : définissez KEYCECODE_LSP_EXECUTABLE (chemin du binaire) et, si besoin, KEYCECODE_LSP_ARGS (tableau JSON d’arguments), puis rouvrez le dossier.\r\n");
-            return;
-        }
-
-        string[] arguments;
-        var argsJson = Environment.GetEnvironmentVariable("KEYCECODE_LSP_ARGS");
+        LspLaunchConfiguration configuration;
         try
         {
-            arguments = string.IsNullOrWhiteSpace(argsJson)
-                ? Array.Empty<string>()
-                : JsonSerializer.Deserialize<string[]>(argsJson) ?? Array.Empty<string>();
+            configuration = LspLaunchConfiguration.Resolve(
+                _editorPreferences.LanguageServerExecutable,
+                _editorPreferences.LanguageServerArgumentsJson,
+                Environment.GetEnvironmentVariable("KEYCECODE_LSP_EXECUTABLE"),
+                Environment.GetEnvironmentVariable("KEYCECODE_LSP_ARGS"));
         }
         catch (JsonException ex)
         {
-            StatusMessage.Text = "Arguments LSP invalides · KEYCECODE_LSP_ARGS doit être un tableau JSON";
-            OutputPanel.AppendText("Language server non démarré : KEYCECODE_LSP_ARGS invalide. Exemple : [\"--stdio\"]\r\n" + ex.Message + "\r\n");
+            StatusMessage.Text = "Arguments LSP invalides";
+            OutputPanel.AppendText("Language server non démarré : les arguments doivent être un tableau JSON de chaînes.\r\n" + ex.Message + "\r\n");
+            return;
+        }
+        var executable = configuration.ExecutablePath;
+        if (string.IsNullOrWhiteSpace(executable))
+        {
+            StatusMessage.Text = "LSP non configuré";
+            OutputPanel.AppendText("Language server désactivé : configurez l’exécutable et les arguments LSP dans Paramètres, puis rouvrez le dossier.\r\n");
             return;
         }
 
@@ -121,7 +121,7 @@ public partial class MainWindow : Window
             await host.StartAsync(new LspServerOptions
             {
                 ExecutablePath = executable,
-                Arguments = arguments,
+                Arguments = configuration.Arguments,
                 WorkingDirectory = workspacePath,
                 RootPath = workspacePath
             });

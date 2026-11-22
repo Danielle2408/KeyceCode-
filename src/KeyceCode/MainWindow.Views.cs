@@ -4,8 +4,10 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.IO;
 using System.Net.Http;
+using System.Text.Json;
 using Microsoft.Win32;
 using KeyceCode.Services;
+using KeyceCode.Services.Lsp;
 
 namespace KeyceCode;
 
@@ -270,6 +272,9 @@ public partial class MainWindow
         var credentialStore = new GeminiCredentialStore();
         var settings = new SettingsWindow(_editorPreferences, themeService.Themes, themeService.CurrentThemeId, credentialStore.HasStoredKey, _gemini.Model) { Owner = this };
         if (settings.ShowDialog() != true) return;
+        var languageServerConfigurationChanged =
+            !string.Equals(_editorPreferences.LanguageServerExecutable, settings.Preferences.LanguageServerExecutable, StringComparison.Ordinal) ||
+            !string.Equals(_editorPreferences.LanguageServerArgumentsJson, settings.Preferences.LanguageServerArgumentsJson, StringComparison.Ordinal);
         _editorPreferences = settings.Preferences;
         _preferencesService.Save(_editorPreferences);
         _gemini.Model = _editorPreferences.GeminiModel ?? _gemini.Model;
@@ -289,6 +294,8 @@ public partial class MainWindow
         if (settings.SelectedThemeId is not null && settings.SelectedThemeId != themeService.CurrentThemeId)
             themeService.SetTheme(Application.Current, settings.SelectedThemeId);
         await SendEditorOptionsAsync();
+        if (languageServerConfigurationChanged && _workspace is not null)
+            await ConfigureLanguageServerAsync(_workspace.RootPath);
     }
 
     private void FormatOnSaveMenuItem_Click(object sender, RoutedEventArgs e)
@@ -478,6 +485,8 @@ internal sealed class SettingsWindow : Window
     private readonly TextBox _search = new();
     private readonly PasswordBox _geminiKey = new();
     private readonly TextBox _geminiModel = new();
+    private readonly TextBox _languageServerExecutable = new();
+    private readonly TextBox _languageServerArguments = new();
     private readonly CheckBox _clearGeminiKey = new();
     private readonly Button _testGemini = new() { Content = "Tester la connexion Gemini", MinWidth = 180, HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TextBlock _geminiTestStatus = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 6, 4, 0) };
@@ -534,6 +543,20 @@ internal sealed class SettingsWindow : Window
         _stickyScroll.Content = "Afficher les en-têtes de portée"; _stickyScroll.IsChecked = initial.StickyScroll; content.Children.Add(Row("Sticky scroll", _stickyScroll));
         _autoSave.Content = "Sauvegarder automatiquement après 1 seconde"; _autoSave.IsChecked = initial.AutoSave; content.Children.Add(Row("Sauvegarde", _autoSave));
         _formatOnSave.Content = "Formater avec le serveur LSP avant chaque sauvegarde"; _formatOnSave.IsChecked = initial.FormatOnSave; content.Children.Add(Row("Formatage", _formatOnSave));
+        content.Children.Add(new TextBlock { Text = "Serveur de langage (LSP)", FontSize = 16, Margin = new Thickness(0, 18, 0, 8) });
+        _languageServerExecutable.Text = initial.LanguageServerExecutable ?? string.Empty;
+        _languageServerExecutable.ToolTip = "Chemin d’un serveur LSP ou nom d’une commande accessible dans PATH (ex. dotnet)";
+        content.Children.Add(Row("Exécutable LSP", _languageServerExecutable));
+        _languageServerArguments.Text = initial.LanguageServerArgumentsJson ?? string.Empty;
+        _languageServerArguments.ToolTip = "Tableau JSON d’arguments transmis séparément, sans shell intermédiaire. Exemple : [\"server.dll\", \"--stdio\"]";
+        content.Children.Add(Row("Arguments LSP (JSON)", _languageServerArguments));
+        var lspHelp = new TextBlock
+        {
+            Text = "Installez d’abord un serveur compatible avec le langage voulu. Ces paramètres remplacent les variables KEYCECODE_LSP_EXECUTABLE et KEYCECODE_LSP_ARGS; vides, elles restent utilisées. Une modification redémarre le serveur pour l’espace de travail ouvert.",
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 2, 2, 10), Tag = "Serveur de langage LSP exécutable arguments IntelliSense complétion"
+        };
+        lspHelp.SetResourceReference(ForegroundProperty, "MutedBrush");
+        content.Children.Add(lspHelp);
         content.Children.Add(new TextBlock { Text = "KeyceIA", FontSize = 16, Margin = new Thickness(0, 18, 0, 8) });
         _geminiModel.Text = initial.GeminiModel ?? currentGeminiModel;
         _geminiModel.ToolTip = "Identifiant de modèle Gemini Developer API (ex. gemini-3.8-flash)";
@@ -615,6 +638,16 @@ internal sealed class SettingsWindow : Window
             MessageBox.Show(this, "L’identifiant du modèle Gemini ne peut pas être vide.", "KeyceIA", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        try
+        {
+            _ = LspLaunchConfiguration.Resolve("validation", _languageServerArguments.Text);
+        }
+        catch (JsonException ex)
+        {
+            MessageBox.Show(this, "Les arguments LSP doivent être un tableau JSON de chaînes. Exemple : [\"--stdio\"]\n" + ex.Message,
+                "Serveur de langage", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         Preferences = new EditorPreferences
         {
             FontFamily = string.IsNullOrWhiteSpace(_fontFamily.Text) ? "Cascadia Code, Consolas, monospace" : _fontFamily.Text.Trim(),
@@ -637,7 +670,9 @@ internal sealed class SettingsWindow : Window
             AutoSave = _autoSave.IsChecked == true,
             FormatOnSave = _formatOnSave.IsChecked == true,
             GeminiInlineCompletionEnabled = _geminiInlineCompletion.IsChecked == true,
-            GeminiModel = _geminiModel.Text.Trim()
+            GeminiModel = _geminiModel.Text.Trim(),
+            LanguageServerExecutable = string.IsNullOrWhiteSpace(_languageServerExecutable.Text) ? null : _languageServerExecutable.Text.Trim(),
+            LanguageServerArgumentsJson = string.IsNullOrWhiteSpace(_languageServerArguments.Text) ? null : _languageServerArguments.Text.Trim()
         };
         DialogResult = true;
     }
