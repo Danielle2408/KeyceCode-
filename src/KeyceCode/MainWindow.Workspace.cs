@@ -65,6 +65,14 @@ public partial class MainWindow
         var menu = new ContextMenu();
         menu.Items.Add(MenuAction("Nouveau fichier…", () => CreateWorkspaceEntryAsync(entry, directory: false)));
         menu.Items.Add(MenuAction("Nouveau dossier…", () => CreateWorkspaceEntryAsync(entry, directory: true)));
+        if (!entry.IsDirectory)
+        {
+            menu.Items.Add(MenuAction("Ouvrir dans le groupe secondaire", async () =>
+            {
+                await PostEditorMessageAsync(new { type = "ensureSplit", orientation = "vertical" });
+                await OpenDocumentAsync(entry.FullPath, pin: true);
+            }));
+        }
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuAction("Renommer…", () => RenameWorkspaceEntryAsync(entry)));
         menu.Items.Add(MenuAction("Supprimer", () => DeleteWorkspaceEntryAsync(entry)));
@@ -236,7 +244,7 @@ public partial class MainWindow
             _documents.Add(document); _activeDocument = document;
             RecordNavigation(document.Path);
             StatusLanguage.Content = kind.Language;
-            RefreshTabs(); await SendDocumentAsync(document); await EnsureLspDocumentAsync(document);
+            RefreshTabs(); await SendDocumentAsync(document, replaceEditorText: true);
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -267,11 +275,23 @@ public partial class MainWindow
             tab.SetResourceReference(BackgroundProperty, active ? "TabActiveBackground" : "TabBarBackground");
             tab.SetResourceReference(ForegroundProperty, active ? "ForegroundBrush" : "MutedBrush");
             tab.SetResourceReference(BorderBrushProperty, active ? "AccentBrush" : "BorderBrush");
+            var tabMenu = new ContextMenu();
+            tabMenu.Items.Add(MenuAction("Ouvrir dans le groupe secondaire", () => OpenDocumentInSecondaryPaneAsync(document)));
+            tab.ContextMenu = tabMenu;
             tab.Click += Tab_Click; EditorTabs.Children.Add(tab);
         }
         if (_activeDocument is not null)
             Breadcrumbs.Text = _workspace is null ? _activeDocument.Path : Path.GetRelativePath(_workspace.RootPath, _activeDocument.Path);
         else Breadcrumbs.Text = _workspace?.RootPath ?? "Ouvrez un dossier pour commencer";
+    }
+
+    private async Task OpenDocumentInSecondaryPaneAsync(EditorDocument document)
+    {
+        await PostEditorMessageAsync(new { type = "ensureSplit", orientation = "vertical" });
+        _activeDocument = document;
+        if (!string.IsNullOrWhiteSpace(document.Path)) RecordNavigation(document.Path);
+        RefreshTabs();
+        await SendDocumentAsync(document);
     }
 
     private async void Tab_Click(object sender, RoutedEventArgs e)
@@ -351,6 +371,7 @@ public partial class MainWindow
             if (_activeDocument is not null) await SendDocumentAsync(_activeDocument);
             else await PostEditorMessageAsync(new { type = "setDocument", id = "welcome", path = "", text = "// Bienvenue dans KeyceCode", language = "csharp" });
         }
+        await PostEditorMessageAsync(new { type = "closeDocument", id = document.Id, fallbackId = _activeDocument?.Id ?? "welcome" });
         RefreshTabs();
     }
 

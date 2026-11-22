@@ -40,7 +40,6 @@ public partial class MainWindow : Window
     private string? _selectedText;
     private int _cursorOffset;
     private bool _webReady;
-    private bool _syncingDocument;
     private bool _sidebarVisible = true;
     private bool _panelVisible = true;
     private bool _assistantVisible;
@@ -667,7 +666,7 @@ public partial class MainWindow : Window
             else if (type == "contentChanged")
             {
                 var doc = FindDocument(root);
-                if (doc is not null && !_syncingDocument)
+                if (doc is not null)
                 {
                     doc.Text = ReadString(root, "text") ?? doc.Text;
                     var version = ReadInt(root, "version", 0);
@@ -886,11 +885,9 @@ public partial class MainWindow : Window
         await Task.CompletedTask;
     }
 
-    private async Task SendDocumentAsync(EditorDocument document)
+    private async Task SendDocumentAsync(EditorDocument document, bool replaceEditorText = false)
     {
-        _syncingDocument = true;
-        await PostEditorMessageAsync(new { type = "setDocument", id = document.Id, path = document.Path, text = document.Text, language = document.Language });
-        _syncingDocument = false;
+        await PostEditorMessageAsync(new { type = "setDocument", id = document.Id, path = document.Path, text = document.Text, language = document.Language, replaceText = replaceEditorText });
         await EnsureLspDocumentAsync(document);
         UpdateFileStatus(document);
     }

@@ -541,7 +541,7 @@
       if (!model || model.isDisposed()) {
         model = monaco.editor.createModel(String(message.text || ""), message.language || "plaintext", uri);
         models.set(key, model);
-      } else if (message.text !== undefined && model.getValue() !== message.text) {
+      } else if (message.replaceText === true && message.text !== undefined && model.getValue() !== message.text) {
         model.setValue(String(message.text));
       }
       monaco.editor.setModelLanguage(model, message.language || "plaintext");
@@ -645,6 +645,41 @@
             secondaryEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.Space, () => post({ type: "command", command: "geminiComplete" }));
             secondaryEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.Period, () => requestCodeActions());
             activatePane(1); secondaryEditor.layout();
+          }
+          break;
+        }
+        case "ensureSplit": {
+          if (!secondaryEditor) {
+            window.keyce.dispatch({ type: "toggleSplit", orientation: message.orientation || "vertical" });
+          } else {
+            splitOrientation = message.orientation === "horizontal" ? "horizontal" : "vertical";
+            document.getElementById("editor-groups")?.classList.toggle("horizontal", splitOrientation === "horizontal");
+            primaryEditor.layout(); secondaryEditor.layout();
+          }
+          activatePane(1);
+          secondaryEditor?.focus();
+          break;
+        }
+        case "activatePane": {
+          activatePane(message.pane === 1 ? 1 : 0);
+          editor?.focus();
+          break;
+        }
+        case "closeDocument": {
+          const closingEntry = [...modelIdsByUri.entries()].find(([, id]) => id === message.id);
+          const fallbackEntry = [...modelIdsByUri.entries()].find(([, id]) => id === message.fallbackId);
+          const closingModel = closingEntry ? models.get(closingEntry[0]) : null;
+          const fallbackModel = fallbackEntry ? models.get(fallbackEntry[0]) : null;
+          if (closingModel && fallbackModel) {
+            if (primaryEditor.getModel() === closingModel) primaryEditor.setModel(fallbackModel);
+            if (secondaryEditor?.getModel() === closingModel) secondaryEditor.setModel(fallbackModel);
+          }
+          if (closingEntry && closingModel && primaryEditor.getModel() !== closingModel && secondaryEditor?.getModel() !== closingModel) {
+            closingModel.dispose();
+            models.delete(closingEntry[0]);
+            modelPathsByUri.delete(closingEntry[0]);
+            modelIdsByUri.delete(closingEntry[0]);
+            documentMarkers.delete(message.id);
           }
           break;
         }

@@ -78,7 +78,7 @@ public partial class MainWindow
                         RefreshTabs();
                         if (ReferenceEquals(document, _activeDocument))
                         {
-                            await SendDocumentAsync(document);
+                            await SendDocumentAsync(document, replaceEditorText: true);
                             UpdateFileStatus(document);
                         }
                         if (_languageServer is not null && _lspDocumentUris.TryGetValue(document.Id, out var uri))

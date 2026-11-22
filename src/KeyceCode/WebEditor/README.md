@@ -19,7 +19,8 @@ The C# host sends one JSON object with a `type` discriminator using WebView2's `
 
 Host to page:
 
-- `setDocument`: `{ "type":"setDocument", "id":"doc-id", "path":"relative/path.cs", "text":"...", "language":"csharp", "version":0, "theme":"keyce-night", "options":{} }`
+- `setDocument`: `{ "type":"setDocument", "id":"doc-id", "path":"relative/path.cs", "text":"...", "language":"csharp", "version":0, "theme":"keyce-night", "options":{}, "replaceText":false }`; existing Monaco models keep their live contents unless `replaceText` is explicitly `true` (for example after a confirmed disk reload).
+- `ensureSplit`: create or orient the secondary editor and activate it. `activatePane` selects a group. `closeDocument` removes a closed model from visible groups and disposes it when unused.
 - `setTheme`: `{ "type":"setTheme", "theme":"vs-dark|vs|hc-black|keyce-night" }`
 - `setOptions`: `{ "type":"setOptions", "options":{ "fontSize":15, "fontFamily":"Cascadia Code", "tabSize":4, "minimap":{"enabled":false} } }`
 - `executeCommand`: `{ "type":"executeCommand", "command":"undo|redo|find|replace|formatDocument|formatSelection|commentLine|uncommentLine|fold|unfold|selectAll", "args":{} }`
