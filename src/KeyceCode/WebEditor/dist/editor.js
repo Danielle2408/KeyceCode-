@@ -6,9 +6,13 @@
   const errorNode = document.getElementById("error");
   let monacoApi;
   let editor;
+  let secondaryEditor = null;
+  let activePane = 0;
+  let splitOrientation = "vertical";
+  let editorOptions;
   let activeDocument = { id: null, path: null, version: 0 };
   let suppressChanges = false;
-  let contentTimer = 0;
+  const contentTimers = new Map();
   const models = new Map();
   const modelPathsByUri = new Map();
   const modelIdsByUri = new Map();
@@ -37,22 +41,44 @@
     return monaco.Uri.parse(`file:///workspace/${safePath.split("/").map(encodeURIComponent).join("/")}`);
   }
 
-  function notifyContentChanged() {
-    if (suppressChanges || !editor || !activeDocument.id) return;
+  function documentForModel(model) {
+    if (!model) return null;
+    const key = model.uri.toString();
+    return { id: modelIdsByUri.get(key), path: modelPathsByUri.get(key) || "" };
+  }
+
+  function activatePane(pane) {
+    if (pane === 1 && !secondaryEditor) return;
+    activePane = pane;
+    editor = pane === 1 ? secondaryEditor : primaryEditor;
+    const model = editor?.getModel();
+    const doc = documentForModel(model);
+    if (doc?.id) {
+      activeDocument = { ...doc, version: model.getVersionId() };
+      post({ type: "activePaneChanged", id: doc.id });
+    }
+    document.querySelectorAll(".editor-pane").forEach((node, index) => node.classList.toggle("active", index === pane));
+  }
+
+  let primaryEditor;
+  function notifyContentChanged(source = editor) {
+    const model = source?.getModel();
+    const doc = documentForModel(model);
+    if (suppressChanges || !source || !doc?.id) return;
     cancelAiCompletions();
-    window.clearTimeout(contentTimer);
-    contentTimer = window.setTimeout(() => {
-      const model = editor.getModel();
+    window.clearTimeout(contentTimers.get(doc.id));
+    const timer = window.setTimeout(() => {
+      contentTimers.delete(doc.id);
       if (!model) return;
-      activeDocument.version = model.getVersionId();
       post({
         type: "contentChanged",
-        id: activeDocument.id,
-        path: activeDocument.path,
+        id: doc.id,
+        path: doc.path,
         text: model.getValue(),
-        version: activeDocument.version
+        version: model.getVersionId()
       });
     }, 90);
+    contentTimers.set(doc.id, timer);
   }
 
   function initialize(monaco) {
@@ -116,7 +142,7 @@
       }
     });
 
-    editor = monaco.editor.create(document.getElementById("editor"), {
+    editorOptions = {
       value: "",
       language: "plaintext",
       theme: "keyce-night",
@@ -142,34 +168,38 @@
       padding: { top: 10, bottom: 10 },
       stickyScroll: { enabled: true },
       unicodeHighlight: { ambiguousCharacters: false }
-    });
+    };
+    editor = primaryEditor = monaco.editor.create(document.getElementById("editor"), editorOptions);
 
-    editor.onDidChangeModelContent(notifyContentChanged);
+    editor.onDidChangeModelContent(() => notifyContentChanged(primaryEditor));
     editor.onDidChangeModel(() => {
-      const model = editor.getModel();
+      const model = primaryEditor.getModel();
       const path = model && modelPathsByUri.get(model.uri.toString());
       if (path) post({ type: "lspModelActivated", path });
     });
     editor.onDidChangeCursorSelection((event) => {
       cancelAiCompletions();
-      if (!activeDocument.id) return;
+      const model = primaryEditor.getModel();
+      const doc = documentForModel(model);
+      if (!doc?.id) return;
       const selection = event.selection;
       post({
         type: "cursorChanged",
-        id: activeDocument.id,
+        id: doc.id,
         line: selection.positionLineNumber,
         column: selection.positionColumn,
-        offset: editor.getModel()?.getOffsetAt(selection.getPosition()) || 0,
-        version: editor.getModel()?.getVersionId() || 0,
+        offset: model?.getOffsetAt(selection.getPosition()) || 0,
+        version: model?.getVersionId() || 0,
         selection: {
           startLine: selection.startLineNumber,
           startColumn: selection.startColumn,
           endLine: selection.endLineNumber,
           endColumn: selection.endColumn
         },
-        selectedText: editor.getModel()?.getValueInRange(selection) || ""
+        selectedText: model?.getValueInRange(selection) || ""
       });
     });
+    editor.onDidFocusEditorWidget(() => activatePane(0));
 
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => requestSave());
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => post({ type: "command", command: "find" }));
@@ -502,7 +532,6 @@
 
   function setDocument(message) {
     if (!editor) return;
-    window.clearTimeout(contentTimer);
     suppressChanges = true;
     try {
       const id = String(message.id || message.path || "untitled");
@@ -529,6 +558,7 @@
       if (message.theme) monaco.editor.setTheme(message.theme);
       monaco.editor.setModelMarkers(model, "keycecode-lsp", documentMarkers.get(id) || []);
       editor.focus();
+      activatePane(activePane);
     } finally {
       suppressChanges = false;
     }
@@ -558,6 +588,64 @@
     dispatch(message) {
       if (!message || typeof message !== "object") return;
       switch (message.type) {
+        case "toggleSplit": {
+          const groups = document.getElementById("editor-groups");
+          if (message.close === true) {
+            if (secondaryEditor) {
+              secondaryEditor.dispose(); secondaryEditor = null;
+              document.getElementById("editor-secondary")?.remove();
+              groups.classList.remove("horizontal");
+              activatePane(0); primaryEditor.layout();
+            }
+            break;
+          }
+          if (secondaryEditor) {
+            if (message.orientation) {
+              splitOrientation = message.orientation === "horizontal" ? "horizontal" : "vertical";
+              groups.classList.toggle("horizontal", splitOrientation === "horizontal");
+              primaryEditor.layout(); secondaryEditor.layout();
+            } else {
+              secondaryEditor.dispose(); secondaryEditor = null;
+              document.getElementById("editor-secondary")?.remove();
+              groups.classList.remove("horizontal");
+              activatePane(0); primaryEditor.layout();
+            }
+          } else {
+            splitOrientation = message.orientation === "horizontal" ? "horizontal" : "vertical";
+            groups.classList.toggle("horizontal", splitOrientation === "horizontal");
+            const pane = document.createElement("section");
+            pane.id = "editor-secondary"; pane.className = "editor-pane"; pane.setAttribute("aria-label", "Éditeur de code secondaire");
+            groups.appendChild(pane);
+            secondaryEditor = monacoApi.editor.create(pane, editorOptions);
+            secondaryEditor.setModel(primaryEditor.getModel());
+            secondaryEditor.onDidChangeModel(() => {
+              const model = secondaryEditor.getModel();
+              const path = model && modelPathsByUri.get(model.uri.toString());
+              if (path) post({ type: "lspModelActivated", path });
+            });
+            secondaryEditor.onDidChangeModelContent(() => notifyContentChanged(secondaryEditor));
+            secondaryEditor.onDidFocusEditorWidget(() => activatePane(1));
+            secondaryEditor.onDidChangeCursorSelection((event) => {
+              activatePane(1);
+              const model = secondaryEditor.getModel();
+              const doc = documentForModel(model);
+              if (!doc?.id) return;
+              const selection = event.selection;
+              post({ type: "cursorChanged", id: doc.id, line: selection.positionLineNumber, column: selection.positionColumn,
+                offset: model.getOffsetAt(selection.getPosition()), version: model.getVersionId(),
+                selection: { startLine: selection.startLineNumber, startColumn: selection.startColumn, endLine: selection.endLineNumber, endColumn: selection.endColumn },
+                selectedText: model.getValueInRange(selection) });
+            });
+            secondaryEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyS, () => requestSave());
+            secondaryEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyF, () => post({ type: "command", command: "find" }));
+            secondaryEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyH, () => post({ type: "command", command: "replace" }));
+            secondaryEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyP, () => post({ type: "command", command: "quickOpen" }));
+            secondaryEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.Space, () => post({ type: "command", command: "geminiComplete" }));
+            secondaryEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.Period, () => requestCodeActions());
+            activatePane(1); secondaryEditor.layout();
+          }
+          break;
+        }
         case "setDocument": setDocument(message); break;
         case "setTheme": monacoApi?.editor.setTheme(message.theme || "keyce-night"); break;
         case "setLanguage": {
@@ -686,7 +774,7 @@
           break;
         }
         case "focus": editor?.focus(); break;
-        case "layout": editor?.layout(); break;
+        case "layout": editor?.layout(); primaryEditor?.layout(); secondaryEditor?.layout(); break;
         default: post({ type: "editorError", message: `Message hôte inconnu : ${message.type}` });
       }
     },

@@ -8,7 +8,9 @@
   <link rel="stylesheet" href="./editor.css">
 </head>
 <body>
-  <main id="editor" aria-label="Éditeur de code"></main>
+  <main id="editor-groups" class="editor-groups" aria-label="Groupes d’éditeurs">
+    <section id="editor" class="editor-pane" aria-label="Éditeur de code principal"></section>
+  </main>
   <div id="loading" role="status"><span class="spinner"></span><span>Chargement de l’éditeur…</span></div>
   <div id="error" role="alert" hidden></div>
   <script src="./vs/loader.js"></script>

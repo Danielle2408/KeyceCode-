@@ -700,6 +700,17 @@ public partial class MainWindow : Window
             else if (type == "lspRefactorCancel") CancelLspRefactorRequest(ReadString(root, "requestId"));
             else if (type == "lspCodeActionRequest") await HandleLspCodeActionsAsync(root);
             else if (type == "lspModelActivated") await ActivateLspNavigationModelAsync(root);
+            else if (type == "activePaneChanged")
+            {
+                var document = FindDocument(root);
+                if (document is not null)
+                {
+                    _activeDocument = document;
+                    StatusLanguage.Content = document.Language;
+                    RefreshTabs();
+                    UpdateFileStatus(document);
+                }
+            }
             else if (type == "geminiInlineCompletionRequest") await HandleGeminiInlineCompletionRequestAsync(root);
             else if (type == "geminiInlineCompletionCancel") CancelInlineRequest(ReadString(root, "requestId"));
             else if (type == "cursorChanged")

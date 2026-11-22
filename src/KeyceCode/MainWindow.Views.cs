@@ -139,8 +139,14 @@ public partial class MainWindow
             await PostEditorMessageAsync(new { type = "executeCommand", command = "editor.action.gotoLine", args = line });
     }
 
-    private void SplitEditor_Click(object sender, RoutedEventArgs e) =>
-        StatusMessage.Text = "Les groupes d’éditeurs côte à côte sont encore en développement.";
+    private async void SplitEditor_Click(object sender, RoutedEventArgs e) =>
+        await PostEditorMessageAsync(new { type = "toggleSplit", orientation = "vertical" });
+
+    private async void SplitEditorHorizontal_Click(object sender, RoutedEventArgs e) =>
+        await PostEditorMessageAsync(new { type = "toggleSplit", orientation = "horizontal" });
+
+    private async void CloseEditorGroup_Click(object sender, RoutedEventArgs e) =>
+        await PostEditorMessageAsync(new { type = "toggleSplit", close = true });
 
     private void Theme_Click(object sender, RoutedEventArgs e)
     {
