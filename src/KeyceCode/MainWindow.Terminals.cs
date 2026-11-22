@@ -44,6 +44,8 @@ public partial class MainWindow
         try
         {
             var session = await ConPtySession.StartAsync(executable, arguments, workingDirectory, columns: 120, rows: 30);
+            _buildOutputParsers[session] = new BuildOutputDiagnosticParser();
+            _buildOutputWorkingDirectories[session] = workingDirectory;
             var tab = new TerminalTab { Id = id, Name = requestedName ?? profile, Profile = profile, Session = session };
             _terminalTabs[id] = tab;
             AddTerminalTabItem(tab);
@@ -119,6 +121,8 @@ public partial class MainWindow
     private async Task RemoveTerminalTabAsync(string id, bool selectNext)
     {
         if (!_terminalTabs.Remove(id, out var tab)) return;
+        _buildOutputParsers.Remove(tab.Session);
+        _buildOutputWorkingDirectories.Remove(tab.Session);
         var wasActive = _activeTerminalId == id;
         PostTerminalMessage(new { type = "removeSession", id });
         try { await tab.Session.DisposeAsync(); }

@@ -470,6 +470,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            InitializeEditorPanelHost();
             await CodeEditor.EnsureCoreWebView2Async();
             CodeEditor.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
             CodeEditor.CoreWebView2.Settings.IsStatusBarEnabled = false;

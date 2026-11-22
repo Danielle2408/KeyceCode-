@@ -52,10 +52,20 @@ public partial class MainWindow
 
     private void TogglePanel_Click(object sender, RoutedEventArgs e)
     {
-        if (_panelVisible && PanelRow.ActualHeight > 0) _rememberedPanelHeight = PanelRow.ActualHeight;
+        RememberPanelSize();
         _panelVisible = !_panelVisible;
-        PanelRow.Height = _panelVisible ? new GridLength(_rememberedPanelHeight) : new GridLength(0);
-        PanelSplitter.Visibility = _panelVisible ? Visibility.Visible : Visibility.Collapsed;
+        ApplyPanelPlacement();
+    }
+
+    private void PanelPosition_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string position } || position is not ("Bottom" or "Left" or "Right")) return;
+        RememberPanelSize();
+        _panelPosition = position;
+        ApplyPanelPlacement();
+        try { _layoutService.Save(CaptureWorkbenchLayout()); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { StatusMessage.Text = "Position du panneau modifiée mais non enregistrée : " + ex.Message; }
     }
 
     private void ToggleAssistant_Click(object sender, RoutedEventArgs e)
@@ -74,13 +84,13 @@ public partial class MainWindow
 
     private void ShowPanel(string name)
     {
-        if (_panelVisible && PanelRow.ActualHeight > 0) _rememberedPanelHeight = PanelRow.ActualHeight;
+        RememberPanelSize();
         _activePanel = name;
         TerminalPanel.Visibility = name == "Terminal" ? Visibility.Visible : Visibility.Collapsed;
         ProblemsPanel.Visibility = name == "Problems" ? Visibility.Visible : Visibility.Collapsed;
         OutputPanel.Visibility = name == "Output" ? Visibility.Visible : Visibility.Collapsed;
         DebugConsolePanel.Visibility = name == "DebugConsole" ? Visibility.Visible : Visibility.Collapsed;
-        _panelVisible = true; PanelRow.Height = new GridLength(_rememberedPanelHeight); PanelSplitter.Visibility = Visibility.Visible;
+        _panelVisible = true; ApplyPanelPlacement();
     }
 
     private void ClearPanel_Click(object sender, RoutedEventArgs e)

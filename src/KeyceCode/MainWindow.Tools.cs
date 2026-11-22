@@ -207,7 +207,15 @@ public partial class MainWindow
         {
             var workingDirectory = _buildOutputWorkingDirectories.GetValueOrDefault(session) ?? _workspace?.RootPath ?? Environment.CurrentDirectory;
             string? fullPath = null;
-            try { fullPath = Path.GetFullPath(diagnostic.File, workingDirectory); }
+            try
+            {
+                fullPath = Path.GetFullPath(diagnostic.File, workingDirectory);
+                if (!Path.IsPathRooted(diagnostic.File) && !File.Exists(fullPath) && _workspace is not null)
+                {
+                    var workspaceCandidate = Path.GetFullPath(diagnostic.File, _workspace.RootPath);
+                    if (File.Exists(workspaceCandidate)) fullPath = workspaceCandidate;
+                }
+            }
             catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException) { }
             var displayPath = fullPath is not null && _workspace is not null && IsInsideWorkspace(fullPath, _workspace.RootPath)
                 ? Path.GetRelativePath(_workspace.RootPath, fullPath)
@@ -351,11 +359,9 @@ public partial class MainWindow
                 await StartTerminalAsync(_activeTerminalProfile ?? "PowerShell 7");
             if (captureBuildOutput && _terminalSession is { } buildSession)
             {
-                _buildOutputParsers.Clear();
-                _buildOutputWorkingDirectories.Clear();
-                _buildOutputParsers[buildSession] = new BuildOutputDiagnosticParser();
-                _buildOutputWorkingDirectories[buildSession] = workingDirectory;
+                foreach (var parser in _buildOutputParsers.Values) parser.Clear();
                 _buildProblems.Clear();
+                _buildOutputWorkingDirectories[buildSession] = workingDirectory;
                 RefreshLanguageProblems();
             }
             var isCmd = _activeTerminalProfile == "Invite de commandes";
