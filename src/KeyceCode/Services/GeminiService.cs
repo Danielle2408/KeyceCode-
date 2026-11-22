@@ -76,21 +76,17 @@ public sealed class GeminiService : IDisposable
             throw new InvalidOperationException(
                 "Clé Gemini absente. Définissez GEMINI_API_KEY ou fournissez une clé depuis les paramètres sécurisés de l'application.");
 
-        var relativeUrl = $"models/{Uri.EscapeDataString(_model)}:generateContent";
+        var relativeUrl = "interactions";
         var payload = new Dictionary<string, object>
         {
-            ["contents"] = new[]
-            {
-                new Dictionary<string, object>
-                {
-                    ["role"] = "user",
-                    ["parts"] = new[] { new Dictionary<string, string> { ["text"] = prompt } }
-                }
-            },
-            ["generationConfig"] = new Dictionary<string, object>
+            ["model"] = _model,
+            ["input"] = prompt,
+            // Do not persist code prompts on Google's side; each request is stateless.
+            ["store"] = false,
+            ["generation_config"] = new Dictionary<string, object>
             {
                 ["temperature"] = 0.2,
-                ["maxOutputTokens"] = 2048
+                ["max_output_tokens"] = 2048
             }
         };
 
@@ -135,6 +131,23 @@ public sealed class GeminiService : IDisposable
         try
         {
             using var document = JsonDocument.Parse(body);
+            if (document.RootElement.TryGetProperty("steps", out var steps) && steps.ValueKind == JsonValueKind.Array)
+            {
+                var result = new StringBuilder();
+                foreach (var step in steps.EnumerateArray())
+                {
+                    if (!step.TryGetProperty("type", out var type) || type.GetString() != "model_output" ||
+                        !step.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+                        continue;
+                    foreach (var part in content.EnumerateArray())
+                        if (part.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String)
+                            result.Append(text.GetString());
+                }
+                if (result.Length > 0)
+                    return preserveWhitespace ? result.ToString() : result.ToString().Trim();
+            }
+
+            // Keep accepting the legacy response shape while existing installations migrate.
             if (document.RootElement.TryGetProperty("candidates", out var candidates) &&
                 candidates.ValueKind == JsonValueKind.Array && candidates.GetArrayLength() > 0)
             {
@@ -151,7 +164,9 @@ public sealed class GeminiService : IDisposable
                 }
             }
 
-            var reason = document.RootElement.TryGetProperty("promptFeedback", out var feedback) &&
+            var reason = document.RootElement.TryGetProperty("status", out var status) && status.ValueKind == JsonValueKind.String
+                ? $"Gemini n’a renvoyé aucun texte (état : {status.GetString()})."
+                : document.RootElement.TryGetProperty("promptFeedback", out var feedback) &&
                          feedback.TryGetProperty("blockReason", out var blockReason)
                 ? $"La demande a été bloquée : {blockReason.GetString()}"
                 : "Gemini n'a renvoyé aucun texte.";
