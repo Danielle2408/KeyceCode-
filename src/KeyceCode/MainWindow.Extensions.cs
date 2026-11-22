@@ -1,5 +1,6 @@
 using KeyceCode.Services;
 using Microsoft.Win32;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -45,6 +46,39 @@ public partial class MainWindow
         catch (Exception ex)
         {
             ExtensionGalleryStatus.Text = "Installation VSIX refusée ou impossible : " + ex.Message;
+        }
+        finally { InstallExtensionButton.IsEnabled = true; }
+    }
+
+    private async void ImportVsCodeExtensions_Click(object sender, RoutedEventArgs e)
+    {
+        var source = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".vscode", "extensions");
+        if (!Directory.Exists(source))
+        {
+            var dialog = new OpenFolderDialog
+            {
+                Title = "Choisir le dossier extensions de Visual Studio Code",
+                Multiselect = false
+            };
+            if (dialog.ShowDialog(this) != true) return;
+            source = dialog.FolderName;
+        }
+
+        InstallExtensionButton.IsEnabled = false;
+        ExtensionGalleryStatus.Text = "Import sécurisé des paquets VS Code…";
+        try
+        {
+            var result = await _vsixExtensions.ImportFromVsCodeAsync(source);
+            RefreshInstalledExtensions();
+            ExtensionGalleryStatus.Text = $"{result.Imported.Count} paquet(s) importé(s) comme inactifs; {result.Skipped.Count} ignoré(s).";
+            ExtensionDetails.Text = result.Skipped.Count == 0
+                ? "Les extensions importées sont stockées localement, mais leur code n’est pas exécuté par KeyceCode."
+                : string.Join(Environment.NewLine, result.Skipped.Take(5));
+            StatusMessage.Text = $"Import VS Code : {result.Imported.Count} extension(s)";
+        }
+        catch (Exception ex)
+        {
+            ExtensionGalleryStatus.Text = "Import impossible : " + ex.Message;
         }
         finally { InstallExtensionButton.IsEnabled = true; }
     }

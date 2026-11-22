@@ -36,6 +36,25 @@ public sealed class VsixExtensionServiceTests
     }
 
     [Fact]
+    public async Task ImportFromVsCodeAsync_CopiesInstalledExtensionAsInactivePackage()
+    {
+        using var fixture = new VsixFixture();
+        var source = Path.Combine(fixture.Root, "vscode-extensions", "vendor.sample-1.2.3");
+        Directory.CreateDirectory(source);
+        await File.WriteAllTextAsync(Path.Combine(source, "package.json"),
+            "{\"publisher\":\"vendor\",\"name\":\"sample\",\"version\":\"1.2.3\",\"displayName\":\"Sample extension\"}");
+        await File.WriteAllTextAsync(Path.Combine(source, "main.js"), "// inert test package");
+        var service = new VsixExtensionService(fixture.ExtensionRoot);
+
+        var result = await service.ImportFromVsCodeAsync(Path.GetDirectoryName(source)!);
+
+        var installed = Assert.Single(result.Imported);
+        Assert.Empty(result.Skipped);
+        Assert.Equal("vendor.sample", installed.Id);
+        Assert.Equal("// inert test package", await File.ReadAllTextAsync(Path.Combine(installed.Path, "extension", "main.js")));
+    }
+
+    [Fact]
     public async Task InstallAsync_RejectsPathTraversal()
     {
         using var fixture = new VsixFixture();

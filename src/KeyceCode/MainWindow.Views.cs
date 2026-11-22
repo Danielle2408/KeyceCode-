@@ -177,7 +177,7 @@ public partial class MainWindow
             StatusMessage.Text = "Préférences VS Code importées";
             MessageBox.Show(this,
                 $"Préférences compatibles importées depuis :\n{imported.SourcePath}\n\n" +
-                $"{imported.ExtensionCount} extension(s) VS Code détectée(s). KeyceCode peut les télécharger depuis Open VSX lorsqu’elles y sont publiées, mais ne les exécute pas encore : l’hôte d’extensions VS Code n’est pas disponible. Les raccourcis clavier personnalisés et extensions non prises en charge ne sont pas appliqués.",
+                $"{imported.ExtensionCount} extension(s) VS Code détectée(s) dans le profil local. Vous pouvez copier leurs paquets depuis la vue Extensions; ils resteront inactifs car KeyceCode n’a pas encore d’hôte d’extensions. Les raccourcis clavier personnalisés et thèmes tiers ne sont pas appliqués.",
                 "Import Visual Studio Code", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException)

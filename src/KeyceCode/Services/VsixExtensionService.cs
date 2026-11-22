@@ -8,6 +8,7 @@ using System.Text.Json;
 namespace KeyceCode.Services;
 
 public sealed record InstalledExtension(string Id, string DisplayName, string Version, string Path);
+public sealed record VsCodeExtensionImportResult(IReadOnlyList<InstalledExtension> Imported, IReadOnlyList<string> Skipped);
 
 /// <summary>Installs VSIX archives as inert files. This service never loads or starts extension code.</summary>
 public sealed class VsixExtensionService
@@ -23,6 +24,78 @@ public sealed class VsixExtensionService
     }
 
     public string ExtensionRoot => _extensionRoot;
+
+    /// <summary>Copies installed VS Code extension packages into KeyceCode's inert VSIX store.</summary>
+    public async Task<VsCodeExtensionImportResult> ImportFromVsCodeAsync(string sourceRoot, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceRoot);
+        var root = Path.GetFullPath(sourceRoot);
+        if (!Directory.Exists(root)) throw new DirectoryNotFoundException(root);
+        EnsureNotReparsePoint(root);
+        var temporaryRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KeyceCode", "extensions", "import-staging");
+        Directory.CreateDirectory(temporaryRoot);
+        var imported = new List<InstalledExtension>();
+        var skipped = new List<string>();
+
+        foreach (var extensionDirectory in Directory.EnumerateDirectories(root))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var folderName = Path.GetFileName(extensionDirectory);
+            if (folderName.Equals(".obsolete", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!File.Exists(Path.Combine(extensionDirectory, "package.json"))) continue;
+            var archivePath = Path.Combine(temporaryRoot, Guid.NewGuid().ToString("N") + ".vsix");
+            try
+            {
+                CreateVsixFromInstalledFolder(extensionDirectory, archivePath, cancellationToken);
+                imported.Add(await InstallAsync(archivePath, cancellationToken));
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
+            {
+                skipped.Add($"{folderName}: {ex.Message}");
+            }
+            finally
+            {
+                try { File.Delete(archivePath); } catch (IOException) { }
+            }
+        }
+        return new VsCodeExtensionImportResult(imported, skipped);
+    }
+
+    private static void CreateVsixFromInstalledFolder(string source, string archivePath, CancellationToken cancellationToken)
+    {
+        using var archiveFile = new FileStream(archivePath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        using var archive = new ZipArchive(archiveFile, ZipArchiveMode.Create, leaveOpen: false);
+        var pending = new Stack<string>();
+        pending.Push(source);
+        var entries = 0;
+        long totalBytes = 0;
+        while (pending.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var directory = pending.Pop();
+            EnsureNotReparsePoint(directory);
+            foreach (var path in Directory.EnumerateFileSystemEntries(directory))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                EnsureNotReparsePoint(path);
+                if (Directory.Exists(path)) { pending.Push(path); continue; }
+                var info = new FileInfo(path);
+                totalBytes = checked(totalBytes + info.Length);
+                if (totalBytes > MaximumExpandedBytes) throw new InvalidDataException("L’extension dépasse la limite de 512 Mo.");
+                if (++entries > MaximumEntries) throw new InvalidDataException("L’extension dépasse la limite de 20 000 fichiers.");
+                var relative = Path.GetRelativePath(source, path).Replace(Path.DirectorySeparatorChar, '/');
+                archive.CreateEntryFromFile(path, "extension/" + relative, CompressionLevel.Fastest);
+            }
+        }
+        if (entries == 0) throw new InvalidDataException("Le dossier d’extension est vide.");
+    }
+
+    private static void EnsureNotReparsePoint(string path)
+    {
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Les liens et points de réanalyse ne sont pas importés.");
+    }
 
     public async Task<InstalledExtension> InstallAsync(string vsixPath, CancellationToken cancellationToken = default)
     {
