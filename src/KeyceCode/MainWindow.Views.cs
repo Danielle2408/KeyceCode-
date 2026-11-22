@@ -167,8 +167,34 @@ public partial class MainWindow
         await SendEditorOptionsAsync();
     }
 
-    private void Encoding_Click(object sender, RoutedEventArgs e) => StatusMessage.Text = "Encodage actuel : UTF-8";
-    private void Eol_Click(object sender, RoutedEventArgs e) => StatusMessage.Text = "Fin de ligne actuelle : CRLF";
+    private void Encoding_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeDocument is not { } document) return;
+        var choices = new[] { "UTF-8", "UTF-8 with BOM", "UTF-16 LE", "UTF-16 BE", "UTF-32 LE", "UTF-32 BE", "Windows 1252" };
+        var selected = QuickPickWindow.Show(this, "Enregistrer avec l’encodage", choices);
+        if (selected is null) return;
+        document.EncodingId = selected switch
+        {
+            "UTF-8 with BOM" => "utf-8-bom", "UTF-16 LE" => "utf-16", "UTF-16 BE" => "utf-16be",
+            "UTF-32 LE" => "utf-32", "UTF-32 BE" => "utf-32be", "Windows 1252" => "windows-1252", _ => "utf-8"
+        };
+        document.IsDirty = true;
+        RefreshTabs();
+        UpdateFileStatus(document);
+        StatusMessage.Text = "L’encodage choisi sera appliqué à l’enregistrement.";
+    }
+
+    private void Eol_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeDocument is not { } document) return;
+        var selected = QuickPickWindow.Show(this, "Fin de ligne", ["Windows (CRLF)", "Unix (LF)", "Mac classique (CR)"]);
+        if (selected is null) return;
+        document.LineEnding = selected switch { "Unix (LF)" => "\n", "Mac classique (CR)" => "\r", _ => "\r\n" };
+        document.IsDirty = true;
+        RefreshTabs();
+        UpdateFileStatus(document);
+        StatusMessage.Text = "La fin de ligne choisie sera appliquée à l’enregistrement.";
+    }
     private async void Language_Click(object sender, RoutedEventArgs e)
     {
         var languages = new[] { "csharp", "javascript", "typescript", "json", "html", "css", "markdown", "python", "powershell", "plaintext" };

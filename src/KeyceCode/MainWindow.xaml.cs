@@ -3,6 +3,7 @@ using KeyceCode.Services.Lsp;
 using Microsoft.Web.WebView2.Core;
 using System.IO;
 using System.Text.Json;
+using System.Text;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -322,6 +323,46 @@ public partial class MainWindow : Window
         }
     }
 
+    private static async Task<(string Text, string EncodingId)> ReadTextFileAsync(string path)
+    {
+        var bytes = await File.ReadAllBytesAsync(path);
+        var id = bytes.AsSpan().StartsWith(new byte[] { 0x00, 0x00, 0xFE, 0xFF }) ? "utf-32be"
+            : bytes.AsSpan().StartsWith(new byte[] { 0xFF, 0xFE, 0x00, 0x00 }) ? "utf-32"
+            : bytes.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }) ? "utf-8-bom"
+            : bytes.AsSpan().StartsWith(new byte[] { 0xFE, 0xFF }) ? "utf-16be"
+            : bytes.AsSpan().StartsWith(new byte[] { 0xFF, 0xFE }) ? "utf-16"
+            : "utf-8";
+        if (id == "utf-8" && bytes.Contains((byte)0))
+            throw new InvalidDataException("Ce fichier contient des octets nuls et ne peut pas être ouvert comme texte.");
+        try
+        {
+            using var stream = new MemoryStream(bytes, writable: false);
+            using var reader = new StreamReader(stream, GetTextEncoding(id), detectEncodingFromByteOrderMarks: true);
+            return (await reader.ReadToEndAsync(), id);
+        }
+        catch (DecoderFallbackException) when (id == "utf-8")
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            using var stream = new MemoryStream(bytes, writable: false);
+            using var reader = new StreamReader(stream, GetTextEncoding("windows-1252"), detectEncodingFromByteOrderMarks: false);
+            return (await reader.ReadToEndAsync(), "windows-1252");
+        }
+    }
+
+    private static Encoding GetTextEncoding(string id) => id switch
+    {
+        "utf-8-bom" => new UTF8Encoding(true, true),
+        "utf-16" => new UnicodeEncoding(false, true, true),
+        "utf-16be" => new UnicodeEncoding(true, true, true),
+        "utf-32" => new UTF32Encoding(false, true, true),
+        "utf-32be" => new UTF32Encoding(true, true, true),
+        "windows-1252" => Encoding.GetEncoding(1252, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback),
+        _ => new UTF8Encoding(false, true)
+    };
+
+    private static string NormalizeLineEndings(string text, string lineEnding) =>
+        text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Replace("\n", lineEnding, StringComparison.Ordinal);
+
     private void SaveSession()
     {
         try
@@ -469,6 +510,20 @@ public partial class MainWindow : Window
         await PostEditorMessageAsync(new { type = "setDocument", id = document.Id, path = document.Path, text = document.Text, language = document.Language });
         _syncingDocument = false;
         await EnsureLspDocumentAsync(document);
+        UpdateFileStatus(document);
+    }
+
+    private void UpdateFileStatus(EditorDocument document)
+    {
+        if (!ReferenceEquals(document, _activeDocument)) return;
+        StatusEncoding.Content = document.EncodingId switch
+        {
+            "utf-8-bom" => "UTF-8 BOM", "utf-16" => "UTF-16 LE", "utf-16be" => "UTF-16 BE",
+            "utf-32" => "UTF-32 LE", "utf-32be" => "UTF-32 BE", "windows-1252" => "Windows 1252", _ => "UTF-8"
+        };
+        StatusEol.Content = document.LineEnding switch { "\n" => "LF", "\r" => "CR", _ => "CRLF" };
+        StatusIndentation.Content = $"{(_editorPreferences.InsertSpaces ? "Espaces" : "Tabulations")}: {_editorPreferences.TabSize}";
+        StatusLanguage.Content = document.Language;
     }
 
     private Task SendEditorOptionsAsync() => PostEditorMessageAsync(new
@@ -504,6 +559,8 @@ public partial class MainWindow : Window
         public string Text { get; set; } = text;
         public string Language { get; set; } = language;
         public string? Alias { get; set; } = alias;
+        public string EncodingId { get; set; } = "utf-8";
+        public string LineEnding { get; set; } = Environment.NewLine;
         public string Name => Alias ?? System.IO.Path.GetFileName(Path);
         public bool IsDirty { get; set; }
         public bool IsPreview { get; set; }

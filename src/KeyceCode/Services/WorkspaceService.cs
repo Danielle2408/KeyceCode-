@@ -49,7 +49,7 @@ public sealed class WorkspaceService
         return File.ReadAllTextAsync(safePath, Encoding.UTF8, cancellationToken);
     }
 
-    public async Task WriteFileAsync(string path, string content, CancellationToken cancellationToken = default)
+    public async Task WriteFileAsync(string path, string content, Encoding? encoding = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(content);
         var safePath = ResolvePath(path);
@@ -57,7 +57,7 @@ public sealed class WorkspaceService
         Directory.CreateDirectory(parent);
         // Recheck after creating parents in case a path component was replaced by a link.
         safePath = ResolvePath(path);
-        await File.WriteAllTextAsync(safePath, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+        await File.WriteAllTextAsync(safePath, content, encoding ?? new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
     }
 
     public string CreateFile(string path)

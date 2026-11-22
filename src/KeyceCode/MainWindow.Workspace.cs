@@ -199,11 +199,14 @@ public partial class MainWindow
         if (_activeDocument is { IsPreview: true, IsDirty: false } preview) _documents.Remove(preview);
         try
         {
-            var text = _workspace is not null && IsInsideWorkspace(path, _workspace.RootPath)
-                ? await _workspace.ReadFileAsync(path)
-                : await File.ReadAllTextAsync(path, Encoding.UTF8);
+            path = _workspace is not null && IsInsideWorkspace(path, _workspace.RootPath)
+                ? _workspace.ResolvePath(path)
+                : Path.GetFullPath(path);
+            var (text, encodingId) = await ReadTextFileAsync(path);
+            var lineEnding = text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n"
+                : text.Contains('\n') ? "\n" : text.Contains('\r') ? "\r" : Environment.NewLine;
             var kind = WorkspaceService.GetFileKind(path);
-            var document = new EditorDocument(path, text, kind.Language) { IsPreview = !pin };
+            var document = new EditorDocument(path, text, kind.Language) { IsPreview = !pin, EncodingId = encodingId, LineEnding = lineEnding };
             _documents.Add(document); _activeDocument = document;
             RecordNavigation(document.Path);
             StatusLanguage.Content = kind.Language;
@@ -376,12 +379,14 @@ public partial class MainWindow
         }
         try
         {
-            if (_workspace is not null && IsInsideWorkspace(document.Path, _workspace.RootPath)) await _workspace.WriteFileAsync(document.Path, document.Text);
-            else await File.WriteAllTextAsync(document.Path, document.Text, new UTF8Encoding(false));
+            var text = NormalizeLineEndings(document.Text, document.LineEnding);
+            if (_workspace is not null && IsInsideWorkspace(document.Path, _workspace.RootPath))
+                await _workspace.WriteFileAsync(document.Path, text, GetTextEncoding(document.EncodingId));
+            else await File.WriteAllTextAsync(document.Path, text, GetTextEncoding(document.EncodingId));
             await EnsureLspDocumentAsync(document);
             if (_languageServer is not null && _lspDocumentUris.TryGetValue(document.Id, out var lspUri))
                 await _languageServer.SaveDocumentAsync(lspUri, document.Text);
-            document.IsDirty = false; document.IsPreview = false; RefreshTabs(); StatusMessage.Text = "Fichier enregistré"; return true;
+            document.IsDirty = false; document.IsPreview = false; RefreshTabs(); UpdateFileStatus(document); StatusMessage.Text = "Fichier enregistré"; return true;
         }
         catch (Exception ex) { ShowError(ex); return false; }
     }

@@ -22,7 +22,7 @@ dotnet build src/KeyceCode/KeyceCode.csproj --configuration Release
 
 - Disposition workbench : Activity Bar, Explorer, zone Monaco à onglets, breadcrumbs, panneau inférieur et barre d’état; fenêtre sans barre de titre Windows en doublon.
 - Ouvrir un dossier/fichier, navigation du workspace, création/renommage/suppression confirmée dans l’Explorateur, onglets aperçu/épinglés et demande de confirmation avant fermeture. Le dernier dossier, les fichiers ouverts et l’onglet actif sont restaurés au redémarrage.
-- Monaco local avec coloration syntaxique intégrée, multi-cursor, minimap, numéros de ligne, guides, recherche/remplacement Monaco, paramètres de police, indentation, ligatures, minimap et word wrap.
+- Monaco local avec coloration syntaxique intégrée, multi-cursor, minimap, numéros de ligne, guides, recherche/remplacement Monaco, paramètres de police, indentation, ligatures, minimap et word wrap. Le statut éditeur permet aussi de changer l’encodage (UTF-8, UTF-16/32, Windows-1252) et les fins de ligne (CRLF/LF/CR), appliqués à l’enregistrement. Les fichiers avec octets nuls sans BOM texte sont refusés comme binaires.
 - Thèmes WPF Dark+, KeyceCode Night (bleu nuit/orange), Light+, Dark High Contrast et Light High Contrast; thème et options d’édition enregistrés dans `%APPDATA%\KeyceCode`.
 - Recherche workspace par expression régulière et filtre de fichiers; palette de commandes et accès rapide aux fichiers.
 - Terminal PowerShell/cmd persistant via processus redirigé, profils de base, exécution de fichiers/projets .NET, Python, JavaScript et PowerShell. Ce terminal n’utilise pas encore ConPTY/xterm.js.
