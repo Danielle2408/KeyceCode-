@@ -10,6 +10,9 @@
   let suppressChanges = false;
   let contentTimer = 0;
   const models = new Map();
+  const documentMarkers = new Map();
+  const pendingCompletions = new Map();
+  let completionSequence = 0;
 
   const post = (message) => {
     if (vscode) vscode.postMessage(message);
@@ -134,6 +137,54 @@
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, () => post({ type: "command", command: "quickOpen" }));
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space, () => post({ type: "command", command: "geminiComplete" }));
 
+    // Real language-aware completion comes from the host's configured LSP process.
+    for (const language of ["csharp", "javascript", "javascriptreact", "typescript", "typescriptreact", "json", "jsonc", "html", "css", "scss", "powershell", "python", "go", "rust", "java", "cpp"]) {
+      monaco.languages.registerCompletionItemProvider(language, {
+        triggerCharacters: ["."],
+        provideCompletionItems(model, position, context, token) {
+          if (!vscode || !activeDocument.id || !activeDocument.path) return { suggestions: [] };
+          const requestId = `lsp-${++completionSequence}`;
+          return new Promise((resolve) => {
+            const timer = window.setTimeout(() => {
+              pendingCompletions.delete(requestId);
+              resolve({ suggestions: [] });
+            }, 15000);
+            const subscription = token.onCancellationRequested(() => {
+              window.clearTimeout(timer);
+              subscription.dispose();
+              pendingCompletions.delete(requestId);
+              resolve({ suggestions: [] });
+            });
+            pendingCompletions.set(requestId, (message) => {
+              window.clearTimeout(timer);
+              subscription.dispose();
+              const suggestions = (message.items || []).map((item) => ({
+                label: item.label,
+                kind: completionKind(monaco, item.kind),
+                detail: item.detail || undefined,
+                documentation: item.documentation || undefined,
+                insertText: item.insertText || item.label,
+                insertTextRules: item.insertTextRules || undefined,
+                sortText: item.sortText || undefined,
+                range: undefined
+              }));
+              resolve({ suggestions });
+            });
+            post({
+              type: "lspCompletionRequest",
+              requestId,
+              id: activeDocument.id,
+              path: activeDocument.path,
+              line: position.lineNumber,
+              column: position.column,
+              triggerKind: context.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter ? 2 : 1,
+              triggerCharacter: context.triggerCharacter || null
+            });
+          });
+        }
+      });
+    }
+
     loading.classList.add("ready");
     post({ type: "ready", capabilities: ["monaco", "models", "multicursor", "format-request", "theme", "options"] });
     editor.focus();
@@ -174,6 +225,7 @@
       };
       if (message.options) editor.updateOptions(message.options);
       if (message.theme) monaco.editor.setTheme(message.theme);
+      monaco.editor.setModelMarkers(model, "keycecode-lsp", documentMarkers.get(id) || []);
       editor.focus();
     } finally {
       suppressChanges = false;
@@ -231,8 +283,19 @@
           break;
         }
         case "setDiagnostics": {
+          if (typeof message.id !== "string") break;
+          const markers = Array.isArray(message.markers) ? message.markers : [];
+          documentMarkers.set(message.id, markers);
           const model = editor?.getModel();
-          if (model) monacoApi.editor.setModelMarkers(model, "keycecode", message.markers || []);
+          if (model && activeDocument.id === message.id) monacoApi.editor.setModelMarkers(model, "keycecode-lsp", markers);
+          break;
+        }
+        case "lspCompletionResult": {
+          const resolve = pendingCompletions.get(message.requestId);
+          if (resolve) {
+            pendingCompletions.delete(message.requestId);
+            resolve(message);
+          }
           break;
         }
         case "setReadOnly": editor?.updateOptions({ readOnly: Boolean(message.value) }); break;
@@ -252,6 +315,30 @@
     getValue() { return editor?.getValue() || ""; },
     getSelection() { return editor?.getSelection() || null; }
   };
+
+  function completionKind(monaco, kind) {
+    const value = Number(kind);
+    const map = {
+      1: monaco.languages.CompletionItemKind.Text,
+      2: monaco.languages.CompletionItemKind.Method,
+      3: monaco.languages.CompletionItemKind.Function,
+      4: monaco.languages.CompletionItemKind.Constructor,
+      5: monaco.languages.CompletionItemKind.Field,
+      6: monaco.languages.CompletionItemKind.Variable,
+      7: monaco.languages.CompletionItemKind.Class,
+      8: monaco.languages.CompletionItemKind.Interface,
+      9: monaco.languages.CompletionItemKind.Module,
+      10: monaco.languages.CompletionItemKind.Property,
+      12: monaco.languages.CompletionItemKind.Value,
+      13: monaco.languages.CompletionItemKind.Enum,
+      14: monaco.languages.CompletionItemKind.Keyword,
+      15: monaco.languages.CompletionItemKind.Snippet,
+      16: monaco.languages.CompletionItemKind.Color,
+      17: monaco.languages.CompletionItemKind.File,
+      18: monaco.languages.CompletionItemKind.Reference
+    };
+    return map[value] || monaco.languages.CompletionItemKind.Text;
+  }
 
   if (vscode) vscode.addEventListener("message", (event) => window.keyce.dispatch(event.data));
   else window.addEventListener("message", (event) => {

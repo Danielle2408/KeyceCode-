@@ -28,7 +28,7 @@ public partial class MainWindow
             await RefreshExplorerAsync();
             _documents.Clear(); _activeDocument = null; RefreshTabs();
             await RefreshGitAsync();
-            StatusMessage.Text = path;
+            await ConfigureLanguageServerAsync(_workspace.RootPath);
             ShowView("Explorer");
         }
         catch (Exception ex) { ShowError(ex); }
@@ -199,8 +199,7 @@ public partial class MainWindow
             var document = new EditorDocument(path, text, kind.Language) { IsPreview = !pin };
             _documents.Add(document); _activeDocument = document;
             StatusLanguage.Content = kind.Language;
-            StatusMessage.Text = path;
-            RefreshTabs(); await SendDocumentAsync(document);
+            RefreshTabs(); await SendDocumentAsync(document); await EnsureLspDocumentAsync(document);
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -255,6 +254,13 @@ public partial class MainWindow
             if (result == MessageBoxResult.Yes && !await SaveDocumentAsync(document)) return;
         }
         var index = _documents.IndexOf(document);
+        if (_languageServer is not null && _lspDocumentUris.Remove(document.Id, out var lspUri))
+        {
+            try { await _languageServer.CloseDocumentAsync(lspUri); }
+            catch (Exception ex) { OutputPanel.AppendText("[LSP] Fermeture document : " + ex.Message + Environment.NewLine); }
+            _lspDiagnostics.Remove(lspUri.LocalPath);
+            RefreshLanguageProblems();
+        }
         _documents.Remove(document);
         if (ReferenceEquals(_activeDocument, document))
         {
@@ -318,6 +324,9 @@ public partial class MainWindow
         {
             if (_workspace is not null && IsInsideWorkspace(document.Path, _workspace.RootPath)) await _workspace.WriteFileAsync(document.Path, document.Text);
             else await File.WriteAllTextAsync(document.Path, document.Text, new UTF8Encoding(false));
+            await EnsureLspDocumentAsync(document);
+            if (_languageServer is not null && _lspDocumentUris.TryGetValue(document.Id, out var lspUri))
+                await _languageServer.SaveDocumentAsync(lspUri, document.Text);
             document.IsDirty = false; document.IsPreview = false; RefreshTabs(); StatusMessage.Text = "Fichier enregistré"; return true;
         }
         catch (Exception ex) { ShowError(ex); return false; }

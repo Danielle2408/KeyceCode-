@@ -1,4 +1,5 @@
 using KeyceCode.Services;
+using KeyceCode.Services.Lsp;
 using Microsoft.Web.WebView2.Core;
 using System.IO;
 using System.Text.Json;
@@ -15,6 +16,9 @@ public partial class MainWindow : Window
     private readonly WorkspaceSessionService _sessionService = new();
     private EditorPreferences _editorPreferences;
     private readonly List<EditorDocument> _documents = [];
+    private readonly Dictionary<string, Uri> _lspDocumentUris = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, LspDiagnostics> _lspDiagnostics = new(StringComparer.OrdinalIgnoreCase);
+    private LanguageServerHost? _languageServer;
     private WorkspaceService? _workspace;
     private EditorDocument? _activeDocument;
     private string _activePanel = "Terminal";
@@ -38,12 +42,234 @@ public partial class MainWindow : Window
         TerminalOutput.Text = "KeyceCode integrated terminal\r\n";
         OutputPanel.Text = "KeyceCode output\r\n";
         Loaded += MainWindow_Loaded;
+        Closed += MainWindow_Closed;
         ((App)Application.Current).ThemeService.ThemeChanged += (_, theme) =>
         {
             StatusMessage.Text = $"Thème appliqué : {theme.DisplayName}";
             _ = PostEditorMessageAsync(new { type = "setTheme", theme = MonacoTheme(theme.Id) });
         };
     }
+
+    private async void MainWindow_Closed(object? sender, EventArgs e)
+    {
+        _autoSaveTimer.Stop();
+        if (_languageServer is not null)
+        {
+            try { await _languageServer.DisposeAsync(); }
+            catch (Exception ex) { OutputPanel.AppendText("Arrêt LSP : " + ex.Message + Environment.NewLine); }
+            _languageServer = null;
+        }
+    }
+
+    private async Task ConfigureLanguageServerAsync(string workspacePath)
+    {
+        await StopLanguageServerAsync();
+        var executable = Environment.GetEnvironmentVariable("KEYCECODE_LSP_EXECUTABLE");
+        if (string.IsNullOrWhiteSpace(executable))
+        {
+            StatusMessage.Text = "LSP non configuré · KEYCECODE_LSP_EXECUTABLE";
+            OutputPanel.AppendText("Language server désactivé : définissez KEYCECODE_LSP_EXECUTABLE (chemin du binaire) et, si besoin, KEYCECODE_LSP_ARGS (tableau JSON d’arguments), puis rouvrez le dossier.\r\n");
+            return;
+        }
+
+        string[] arguments;
+        var argsJson = Environment.GetEnvironmentVariable("KEYCECODE_LSP_ARGS");
+        try
+        {
+            arguments = string.IsNullOrWhiteSpace(argsJson)
+                ? Array.Empty<string>()
+                : JsonSerializer.Deserialize<string[]>(argsJson) ?? Array.Empty<string>();
+        }
+        catch (JsonException ex)
+        {
+            StatusMessage.Text = "Arguments LSP invalides · KEYCECODE_LSP_ARGS doit être un tableau JSON";
+            OutputPanel.AppendText("Language server non démarré : KEYCECODE_LSP_ARGS invalide. Exemple : [\"--stdio\"]\r\n" + ex.Message + "\r\n");
+            return;
+        }
+
+        var host = new LanguageServerHost();
+        host.DiagnosticsPublished += LanguageServer_DiagnosticsPublished;
+        host.ServerLogReceived += (_, line) => Dispatcher.BeginInvoke(() => OutputPanel.AppendText("[LSP] " + line + Environment.NewLine));
+        host.TransportError += (_, error) => Dispatcher.BeginInvoke(() =>
+        {
+            StatusMessage.Text = "Language server : erreur de transport";
+            OutputPanel.AppendText("[LSP] " + error.Message + Environment.NewLine);
+        });
+        try
+        {
+            await host.StartAsync(new LspServerOptions
+            {
+                ExecutablePath = executable,
+                Arguments = arguments,
+                WorkingDirectory = workspacePath,
+                RootPath = workspacePath
+            });
+            _languageServer = host;
+            StatusMessage.Text = $"Language server prêt · {Path.GetFileName(executable)}";
+            OutputPanel.AppendText($"Language server initialisé : {Path.GetFileName(executable)} (capabilities reçues).\r\n");
+            foreach (var document in _documents.Where(d => IsInsideWorkspace(d.Path, workspacePath)))
+                await EnsureLspDocumentAsync(document);
+        }
+        catch (Exception ex)
+        {
+            host.DiagnosticsPublished -= LanguageServer_DiagnosticsPublished;
+            await host.DisposeAsync();
+            _languageServer = null;
+            StatusMessage.Text = "Language server indisponible";
+            OutputPanel.AppendText($"Language server non démarré ({Path.GetFileName(executable)}) : {ex.Message}\r\n");
+        }
+    }
+
+    private async Task StopLanguageServerAsync()
+    {
+        var server = _languageServer;
+        _languageServer = null;
+        _lspDocumentUris.Clear();
+        _lspDiagnostics.Clear();
+        RefreshLanguageProblems();
+        if (server is null) return;
+        server.DiagnosticsPublished -= LanguageServer_DiagnosticsPublished;
+        await server.DisposeAsync();
+    }
+
+    private async Task EnsureLspDocumentAsync(EditorDocument document)
+    {
+        var server = _languageServer;
+        if (server is null || !server.IsInitialized) return;
+
+        var belongsToWorkspace = _workspace is not null && !string.IsNullOrWhiteSpace(document.Path) &&
+            IsInsideWorkspace(document.Path, _workspace.RootPath);
+        if (!belongsToWorkspace)
+        {
+            if (_lspDocumentUris.Remove(document.Id, out var previousUri))
+            {
+                await server.CloseDocumentAsync(previousUri);
+                _lspDiagnostics.Remove(previousUri.LocalPath);
+                RefreshLanguageProblems();
+            }
+            return;
+        }
+
+        var targetUri = new Uri(Path.GetFullPath(document.Path));
+        if (_lspDocumentUris.TryGetValue(document.Id, out var openUri))
+        {
+            if (Uri.Compare(openUri, targetUri, UriComponents.AbsoluteUri, UriFormat.SafeUnescaped, StringComparison.OrdinalIgnoreCase) == 0)
+                return;
+            await server.CloseDocumentAsync(openUri);
+            _lspDocumentUris.Remove(document.Id);
+            _lspDiagnostics.Remove(openUri.LocalPath);
+            RefreshLanguageProblems();
+        }
+
+        await server.OpenDocumentAsync(targetUri, document.Language, document.Text);
+        _lspDocumentUris[document.Id] = targetUri;
+    }
+
+    private async void LanguageServer_DiagnosticsPublished(object? sender, LspDiagnostics diagnostics)
+    {
+        await Dispatcher.InvokeAsync(() =>
+        {
+            var fullPath = Path.GetFullPath(diagnostics.DocumentUri.LocalPath);
+            _lspDiagnostics[fullPath] = diagnostics;
+            RefreshLanguageProblems();
+
+            var document = _documents.FirstOrDefault(d => !string.IsNullOrWhiteSpace(d.Path) &&
+                string.Equals(Path.GetFullPath(d.Path), fullPath, StringComparison.OrdinalIgnoreCase));
+            if (document is not null)
+            {
+                var markers = diagnostics.Items.Select(item => new
+                {
+                    startLineNumber = item.Range.StartLine + 1,
+                    startColumn = item.Range.StartCharacter + 1,
+                    endLineNumber = item.Range.EndLine + 1,
+                    endColumn = Math.Max(item.Range.EndCharacter + 1, item.Range.StartCharacter + 2),
+                    message = item.Message,
+                    severity = item.Severity switch { "Error" => 8, "Warning" => 4, "Information" => 2, "Hint" => 1, _ => 1 },
+                    source = item.Source ?? "LSP",
+                    code = item.Code
+                }).ToArray();
+                _ = PostEditorMessageAsync(new { type = "setDiagnostics", id = document.Id, markers });
+            }
+        });
+    }
+
+    private void RefreshLanguageProblems()
+    {
+        ProblemsPanel.Items.Clear();
+        foreach (var (path, diagnostics) in _lspDiagnostics)
+        {
+            var relativePath = _workspace is not null && IsInsideWorkspace(path, _workspace.RootPath)
+                ? Path.GetRelativePath(_workspace.RootPath, path)
+                : path;
+            foreach (var diagnostic in diagnostics.Items)
+                ProblemsPanel.Items.Add(new LanguageProblem(diagnostic.Severity, diagnostic.Message, relativePath,
+                    diagnostic.Range.StartLine + 1));
+        }
+        StatusErrors.Content = $"× {_lspDiagnostics.Values.Sum(d => d.Items.Count(item => item.Severity == "Error"))}";
+        StatusWarnings.Content = $"⚠ {_lspDiagnostics.Values.Sum(d => d.Items.Count(item => item.Severity == "Warning"))}";
+    }
+
+    private async Task ApplyDiagnosticsForDocumentAsync(EditorDocument document)
+    {
+        if (string.IsNullOrWhiteSpace(document.Path) || !_lspDiagnostics.TryGetValue(Path.GetFullPath(document.Path), out var diagnostics))
+            return;
+        var markers = diagnostics.Items.Select(item => new
+        {
+            startLineNumber = item.Range.StartLine + 1,
+            startColumn = item.Range.StartCharacter + 1,
+            endLineNumber = item.Range.EndLine + 1,
+            endColumn = Math.Max(item.Range.EndCharacter + 1, item.Range.StartCharacter + 2),
+            message = item.Message,
+            severity = item.Severity switch { "Error" => 8, "Warning" => 4, "Information" => 2, "Hint" => 1, _ => 1 },
+            source = item.Source ?? "LSP",
+            code = item.Code
+        }).ToArray();
+        await PostEditorMessageAsync(new { type = "setDiagnostics", id = document.Id, markers });
+    }
+
+    private async Task HandleLspCompletionRequestAsync(JsonElement message)
+    {
+        var requestId = ReadString(message, "requestId");
+        if (requestId is null) return;
+        var document = FindDocument(message);
+        var server = _languageServer;
+        if (document is null || server is null || !server.IsInitialized ||
+            !_lspDocumentUris.TryGetValue(document.Id, out var uri))
+        {
+            await PostEditorMessageAsync(new { type = "lspCompletionResult", requestId, items = Array.Empty<object>() });
+            return;
+        }
+
+        try
+        {
+            var items = await server.CompleteAsync(uri,
+                Math.Max(0, ReadInt(message, "line", 1) - 1),
+                Math.Max(0, ReadInt(message, "column", 1) - 1),
+                ReadInt(message, "triggerKind", 1), ReadString(message, "triggerCharacter"));
+            var payload = items.Select(item =>
+            {
+                var kind = int.TryParse(item.Kind, out var parsedKind) ? parsedKind : (int?)null;
+                var snippet = item.Raw.TryGetProperty("insertTextFormat", out var format) && format.TryGetInt32(out var formatValue) && formatValue == 2;
+                return new
+                {
+                    label = item.Label,
+                    detail = item.Detail,
+                    documentation = item.Documentation,
+                    insertText = item.InsertText,
+                    kind,
+                    sortText = item.SortText,
+                    insertTextRules = snippet ? 4 : (int?)null
+                };
+            }).ToArray();
+            await PostEditorMessageAsync(new { type = "lspCompletionResult", requestId, items = payload });
+        }
+        catch (Exception ex)
+        {
+            await PostEditorMessageAsync(new { type = "lspCompletionResult", requestId, items = Array.Empty<object>(), error = ex.Message });
+        }
+    }
+
+    private sealed record LanguageProblem(string Severity, string Message, string File, int Line);
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
@@ -119,14 +345,15 @@ public partial class MainWindow : Window
             if (type == "ready")
             {
                 _webReady = true;
+                var theme = ((App)Application.Current).ThemeService.CurrentTheme;
+                await PostEditorMessageAsync(new { type = "setTheme", theme = MonacoTheme(theme.Id) });
+                await SendEditorOptionsAsync();
                 if (_activeDocument is not null) await SendDocumentAsync(_activeDocument);
                 else
                 {
-                    var theme = ((App)Application.Current).ThemeService.CurrentTheme;
-                    await PostEditorMessageAsync(new { type = "setTheme", theme = MonacoTheme(theme.Id) });
-                    await SendEditorOptionsAsync();
                     await PostEditorMessageAsync(new { type = "setDocument", id = "welcome", path = "", text = "// Bienvenue dans KeyceCode\n// Ouvrez un dossier ou fichier pour commencer.", language = "csharp" });
                 }
+                if (_activeDocument is not null) await ApplyDiagnosticsForDocumentAsync(_activeDocument);
                 StatusMessage.Text = "Éditeur Monaco prêt";
             }
             else if (type == "contentChanged")
@@ -137,9 +364,15 @@ public partial class MainWindow : Window
                     doc.Text = ReadString(root, "text") ?? doc.Text;
                     doc.IsDirty = true;
                     RefreshTabs();
+                    if (_languageServer is not null && _lspDocumentUris.TryGetValue(doc.Id, out var lspUri))
+                    {
+                        try { await _languageServer.ChangeDocumentAsync(lspUri, doc.Text); }
+                        catch (Exception ex) { OutputPanel.AppendText("[LSP] Synchronisation : " + ex.Message + Environment.NewLine); }
+                    }
                     if (_editorPreferences.AutoSave) _autoSaveTimer.Start();
                 }
             }
+            else if (type == "lspCompletionRequest") await HandleLspCompletionRequestAsync(root);
             else if (type == "cursorChanged")
             {
                 StatusCursor.Content = $"Ln {ReadInt(root, "line", 1)}, Col {ReadInt(root, "column", 1)}";
@@ -212,6 +445,7 @@ public partial class MainWindow : Window
         _syncingDocument = true;
         await PostEditorMessageAsync(new { type = "setDocument", id = document.Id, path = document.Path, text = document.Text, language = document.Language });
         _syncingDocument = false;
+        await EnsureLspDocumentAsync(document);
     }
 
     private Task SendEditorOptionsAsync() => PostEditorMessageAsync(new
