@@ -268,24 +268,42 @@ public partial class MainWindow
         if (_workspace is null) { GitBranchLabel.Text = "Aucun dossier ouvert"; GitChanges.Items.Clear(); return; }
         try
         {
-            var output = await RunGitAsync("status", "--porcelain=v1", "--branch");
-            var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            var output = await RunGitAsync("status", "--porcelain=v1", "-z", "--branch");
+            var records = output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
             GitChanges.Items.Clear();
-            foreach (var line in lines)
+            for (var index = 0; index < records.Length; index++)
             {
+                var line = records[index];
                 if (line.StartsWith("## "))
                 {
                     var branch = line[3..].Trim(); GitBranchLabel.Text = branch;
                     StatusGitBranch.Content = "⑂ " + branch.Split("...", StringSplitOptions.None)[0];
                     continue;
                 }
+                if (line.Length < 4) continue;
                 var code = line.Length >= 2 ? line[..2] : "  ";
-                var path = line.Length > 3 ? line[3..].Trim('"') : line;
+                var path = line[3..];
                 var item = new ListBoxItem { Content = $"{code}  {Path.GetFileName(path)}", Tag = (Code: code, Path: path), ToolTip = path };
                 var menu = new ContextMenu();
-                menu.Items.Add(MenuAction("Stage", async () => { await RunGitAsync("add", "--", path); await RefreshGitAsync(); }));
-                menu.Items.Add(MenuAction("Unstage", async () => { await RunGitAsync("restore", "--staged", "--", path); await RefreshGitAsync(); }));
-                menu.Items.Add(MenuAction("Discard changes…", async () =>
+                var diffAction = MenuAction("Afficher le diff", () => ShowGitDiffAsync(path, code));
+                if (!code.Contains('?') || _workspace is null || !Directory.Exists(Path.GetFullPath(Path.Combine(_workspace.RootPath, path))))
+                    menu.Items.Add(diffAction);
+                if (code.Contains('?') || code[1] != ' ')
+                    menu.Items.Add(MenuAction("Stage", async () => { await RunGitAsync("add", "--", path); await RefreshGitAsync(); }));
+                if (code[0] != ' ' && code[0] != '?')
+                    menu.Items.Add(MenuAction("Unstage", async () => { await RunGitAsync("restore", "--staged", "--", path); await RefreshGitAsync(); }));
+                if (code.Contains('?') && _workspace is not null && File.Exists(Path.GetFullPath(Path.Combine(_workspace.RootPath, path))))
+                    menu.Items.Add(MenuAction("Supprimer le fichier non suivi…", async () =>
+                    {
+                        if (MessageBox.Show(this, $"Supprimer définitivement le fichier non suivi {path} ?", "Git", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+                        var fullPath = Path.GetFullPath(Path.Combine(_workspace!.RootPath, path));
+                        var rootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_workspace.RootPath)) + Path.DirectorySeparatorChar;
+                        if (!fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Le chemin sort de l’espace de travail.");
+                        File.Delete(fullPath);
+                        await RefreshGitAsync();
+                    }));
+                else if (code[1] != ' ')
+                    menu.Items.Add(MenuAction("Abandonner les changements…", async () =>
                 {
                     if (MessageBox.Show(this, $"Abandonner les modifications de {path} ?", "Git", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
                     {
@@ -294,18 +312,26 @@ public partial class MainWindow
                 }));
                 item.ContextMenu = menu;
                 GitChanges.Items.Add(item);
+                if ((code[0] is 'R' or 'C') && index + 1 < records.Length) index++;
             }
-            var changed = lines.Count(line => !line.StartsWith("## "));
-            StatusMessage.Text = $"Git : {changed} fichier(s) modifié(s)";
+            StatusMessage.Text = $"Git : {GitChanges.Items.Count} fichier(s) modifié(s)";
         }
         catch (InvalidOperationException) { GitBranchLabel.Text = "Git non détecté"; StatusGitBranch.Content = "⑂ —"; GitChanges.Items.Clear(); }
         catch (Exception ex) { GitBranchLabel.Text = "Erreur Git"; OutputPanel.AppendText(ex.Message + Environment.NewLine); }
     }
 
-    private static MenuItem MenuAction(string header, Func<Task> action)
+    private MenuItem MenuAction(string header, Func<Task> action)
     {
         var item = new MenuItem { Header = header };
-        item.Click += async (_, _) => await action();
+        item.Click += async (_, _) =>
+        {
+            try { await action(); }
+            catch (Exception ex)
+            {
+                OutputPanel.AppendText("[Git] " + ex.Message + Environment.NewLine);
+                StatusMessage.Text = "Action Git impossible · consultez Sortie";
+            }
+        };
         return item;
     }
 
@@ -313,12 +339,121 @@ public partial class MainWindow
     {
         if (_workspace is null) throw new InvalidOperationException("Aucun dossier ouvert.");
         var info = new ProcessStartInfo("git") { WorkingDirectory = _workspace.RootPath, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+        info.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        info.Environment["GCM_INTERACTIVE"] = "Never";
         foreach (var argument in arguments) info.ArgumentList.Add(argument);
         using var process = Process.Start(info) ?? throw new InvalidOperationException("Git n’a pas pu démarrer.");
         var stdout = process.StandardOutput.ReadToEndAsync(); var stderr = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
         var output = await stdout; var error = await stderr;
         if (process.ExitCode != 0) throw new InvalidOperationException(string.IsNullOrWhiteSpace(error) ? output : error);
+        return output;
+    }
+
+    private async void RefreshGit_Click(object sender, RoutedEventArgs e) => await RefreshGitAsync();
+
+    private async void GitBranch_Click(object sender, RoutedEventArgs e)
+    {
+        if (_workspace is null) { StatusMessage.Text = "Ouvrez un dépôt Git."; return; }
+        try
+        {
+            var branches = (await RunGitAsync("branch", "--format=%(refname:short)"))
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (branches.Length == 0) { StatusMessage.Text = "Aucune branche locale à sélectionner."; return; }
+            var selected = QuickPickWindow.Show(this, "Basculer vers une branche locale", branches);
+            if (string.IsNullOrWhiteSpace(selected)) return;
+            await RunGitAsync("switch", "--", selected);
+            await RefreshGitAsync();
+            StatusMessage.Text = "Branche active : " + selected;
+        }
+        catch (Exception ex) { OutputPanel.AppendText("[Git] Changement de branche : " + ex.Message + Environment.NewLine); StatusMessage.Text = "Changement de branche impossible"; }
+    }
+
+    private async void GitPull_Click(object sender, RoutedEventArgs e) => await SynchronizeGitAsync(pull: true);
+    private async void GitPush_Click(object sender, RoutedEventArgs e) => await SynchronizeGitAsync(pull: false);
+
+    private async Task SynchronizeGitAsync(bool pull)
+    {
+        if (_workspace is null) { StatusMessage.Text = "Ouvrez un dépôt Git."; return; }
+        try
+        {
+            var upstream = (await RunGitAsync("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")).Trim();
+            if (upstream.Length == 0) throw new InvalidOperationException("Aucune branche distante suivie. Configurez un remote et un upstream dans Git avant de synchroniser.");
+            if (pull)
+            {
+                var changes = await RunGitAsync("status", "--porcelain=v1");
+                if (!string.IsNullOrWhiteSpace(changes))
+                    throw new InvalidOperationException("Le workspace contient des changements. Enregistrez-les ou mettez-les de côté avant Pull.");
+            }
+            StatusMessage.Text = pull ? $"Pull depuis {upstream}…" : $"Push vers {upstream}…";
+            await RunGitAsync(pull ? "pull" : "push");
+            await RefreshGitAsync();
+            StatusMessage.Text = pull ? $"Pull terminé depuis {upstream}" : $"Push terminé vers {upstream}";
+        }
+        catch (Exception ex)
+        {
+            OutputPanel.AppendText("[Git] " + ex.Message + Environment.NewLine);
+            StatusMessage.Text = pull ? "Pull impossible · consultez Sortie" : "Push impossible · consultez Sortie";
+        }
+    }
+
+    private async void GitChanges_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (GitChanges.SelectedItem is not ListBoxItem { Tag: ValueTuple<string, string> entry }) return;
+        await ShowGitDiffAsync(entry.Item2, entry.Item1);
+    }
+
+    private async Task ShowGitDiffAsync(string path, string statusCode)
+    {
+        try
+        {
+            if (statusCode.Contains('?') && _workspace is not null && Directory.Exists(Path.GetFullPath(Path.Combine(_workspace.RootPath, path))))
+            {
+                ShowPanel("Output");
+                OutputPanel.Text = $"{path} est un dossier non suivi. Ouvrez un fichier individuel pour consulter son diff, ou utilisez Stage pour l’ajouter au suivi Git.";
+                return;
+            }
+            var pieces = new List<string>();
+            if (statusCode[0] != ' ' && statusCode[0] != '?')
+            {
+                var staged = await RunGitAsync("diff", "--cached", "--no-ext-diff", "--no-color", "--", path);
+                if (!string.IsNullOrWhiteSpace(staged)) pieces.Add(staged);
+            }
+            if (statusCode[1] != ' ' && statusCode[1] != '?')
+            {
+                var unstaged = await RunGitAsync("diff", "--no-ext-diff", "--no-color", "--", path);
+                if (!string.IsNullOrWhiteSpace(unstaged)) pieces.Add(unstaged);
+            }
+            if (statusCode.Contains('?'))
+            {
+                var untracked = await RunGitAllowExitCodeAsync("diff", "--no-index", "--no-ext-diff", "--no-color", "--", "/dev/null", path);
+                if (!string.IsNullOrWhiteSpace(untracked)) pieces.Add(untracked);
+            }
+            ShowPanel("Output");
+            OutputPanel.Text = pieces.Count == 0 ? $"Aucun diff disponible pour {path}." : string.Join(Environment.NewLine, pieces);
+            StatusMessage.Text = "Diff Git : " + path;
+        }
+        catch (Exception ex)
+        {
+            OutputPanel.Text = "Impossible de lire le diff Git : " + ex.Message;
+            ShowPanel("Output");
+            StatusMessage.Text = "Diff Git indisponible";
+        }
+    }
+
+    private async Task<string> RunGitAllowExitCodeAsync(params string[] arguments)
+    {
+        if (_workspace is null) throw new InvalidOperationException("Aucun dossier ouvert.");
+        var info = new ProcessStartInfo("git") { WorkingDirectory = _workspace.RootPath, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+        info.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        foreach (var argument in arguments) info.ArgumentList.Add(argument);
+        using var process = Process.Start(info) ?? throw new InvalidOperationException("Git n’a pas pu démarrer.");
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        var output = await stdout;
+        var error = await stderr;
+        if (process.ExitCode is not (0 or 1)) throw new InvalidOperationException(string.IsNullOrWhiteSpace(error) ? output : error);
         return output;
     }
 
