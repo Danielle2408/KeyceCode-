@@ -60,6 +60,52 @@ public sealed class WorkspaceService
         await File.WriteAllTextAsync(safePath, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
     }
 
+    public string CreateFile(string path)
+    {
+        var safePath = ResolvePath(path);
+        if (File.Exists(safePath) || Directory.Exists(safePath))
+            throw new IOException("An entry with that name already exists.");
+        using (File.Create(safePath)) { }
+        return safePath;
+    }
+
+    public string CreateDirectory(string path)
+    {
+        var safePath = ResolvePath(path);
+        if (File.Exists(safePath) || Directory.Exists(safePath))
+            throw new IOException("An entry with that name already exists.");
+        Directory.CreateDirectory(safePath);
+        return safePath;
+    }
+
+    public string RenameEntry(string path, string newName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(newName);
+        if (newName is "." or ".." || Path.GetFileName(newName) != newName ||
+            newName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            throw new ArgumentException("Enter a valid name without a directory path.", nameof(newName));
+
+        var source = ResolvePath(path);
+        if (string.Equals(source, _root, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("The workspace root cannot be renamed here.");
+        if (!File.Exists(source) && !Directory.Exists(source)) throw new FileNotFoundException("The entry no longer exists.", source);
+        var target = ResolvePath(Path.Combine(Path.GetDirectoryName(source)!, newName));
+        if (File.Exists(target) || Directory.Exists(target)) throw new IOException("An entry with that name already exists.");
+        if (Directory.Exists(source)) Directory.Move(source, target);
+        else File.Move(source, target);
+        return target;
+    }
+
+    public void DeleteEntry(string path)
+    {
+        var safePath = ResolvePath(path);
+        if (string.Equals(safePath, _root, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("The workspace root cannot be deleted.");
+        if (Directory.Exists(safePath)) Directory.Delete(safePath, recursive: true);
+        else if (File.Exists(safePath)) File.Delete(safePath);
+        else throw new FileNotFoundException("The entry no longer exists.", safePath);
+    }
+
     public string ResolvePath(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

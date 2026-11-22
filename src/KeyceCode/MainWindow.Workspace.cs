@@ -25,8 +25,7 @@ public partial class MainWindow
             _workspace = new WorkspaceService(path);
             WorkspaceTitle.Text = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
             WorkspaceFolderLabel.Text = WorkspaceTitle.Text.ToUpperInvariant();
-            ExplorerTree.Items.Clear();
-            foreach (var entry in await _workspace.GetEntriesAsync()) ExplorerTree.Items.Add(CreateTreeItem(entry));
+            await RefreshExplorerAsync();
             _documents.Clear(); _activeDocument = null; RefreshTabs();
             await RefreshGitAsync();
             StatusMessage.Text = path;
@@ -35,14 +34,134 @@ public partial class MainWindow
         catch (Exception ex) { ShowError(ex); }
     }
 
-    private TreeViewItem CreateTreeItem(WorkspaceEntry entry)
+    private async Task RefreshExplorerAsync()
+    {
+        if (_workspace is null) return;
+        var expanded = ExplorerTree.Items.Cast<TreeViewItem>().SelectMany(FlattenTreeItems)
+            .Where(item => item.IsExpanded && item.Tag is WorkspaceEntry)
+            .Select(item => ((WorkspaceEntry)item.Tag).FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        ExplorerTree.Items.Clear();
+        foreach (var entry in await _workspace.GetEntriesAsync()) ExplorerTree.Items.Add(CreateTreeItem(entry, expanded));
+    }
+
+    private static IEnumerable<TreeViewItem> FlattenTreeItems(TreeViewItem item)
+    {
+        yield return item;
+        foreach (var child in item.Items.OfType<TreeViewItem>())
+            foreach (var nested in FlattenTreeItems(child)) yield return nested;
+    }
+
+    private TreeViewItem CreateTreeItem(WorkspaceEntry entry, HashSet<string>? expanded = null)
     {
         var panel = new DockPanel { LastChildFill = true };
         panel.Children.Add(new TextBlock { Text = entry.Icon, Width = 30, Foreground = ParseBrush(entry.IsDirectory ? "#FFD7BA7D" : "#FF75BEFF") });
         panel.Children.Add(new TextBlock { Text = entry.Name, TextTrimming = TextTrimming.CharacterEllipsis });
-        var node = new TreeViewItem { Header = panel, Tag = entry, IsExpanded = false };
-        foreach (var child in entry.Children) node.Items.Add(CreateTreeItem(child));
+        var node = new TreeViewItem { Header = panel, Tag = entry, IsExpanded = expanded?.Contains(entry.FullPath) ?? false };
+        foreach (var child in entry.Children) node.Items.Add(CreateTreeItem(child, expanded));
+        var menu = new ContextMenu();
+        menu.Items.Add(MenuAction("Nouveau fichier…", () => CreateWorkspaceEntryAsync(entry, directory: false)));
+        menu.Items.Add(MenuAction("Nouveau dossier…", () => CreateWorkspaceEntryAsync(entry, directory: true)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MenuAction("Renommer…", () => RenameWorkspaceEntryAsync(entry)));
+        menu.Items.Add(MenuAction("Supprimer", () => DeleteWorkspaceEntryAsync(entry)));
+        node.ContextMenu = menu;
+        node.ContextMenuOpening += (_, _) => node.IsSelected = true;
         return node;
+    }
+
+    private string? GetExplorerParent(WorkspaceEntry? selected)
+    {
+        if (_workspace is null) return null;
+        if (selected is null) return _workspace.RootPath;
+        return selected.IsDirectory ? selected.FullPath : Path.GetDirectoryName(selected.FullPath);
+    }
+
+    private async Task CreateWorkspaceEntryAsync(WorkspaceEntry? selected, bool directory)
+    {
+        if (_workspace is null) { StatusMessage.Text = "Ouvrez un dossier avant de créer un fichier."; return; }
+        var parent = GetExplorerParent(selected);
+        if (parent is null) return;
+        var kind = directory ? "dossier" : "fichier";
+        var name = QuickPickWindow.Prompt(this, $"Nouveau {kind}", $"Nom du {kind}");
+        if (string.IsNullOrWhiteSpace(name)) return;
+        try
+        {
+            var relativePath = Path.GetRelativePath(_workspace.RootPath, Path.Combine(parent, name.Trim()));
+            var path = directory ? _workspace.CreateDirectory(relativePath) : _workspace.CreateFile(relativePath);
+            await RefreshExplorerAsync();
+            if (!directory) await OpenDocumentAsync(path, pin: true);
+            else StatusMessage.Text = $"Dossier créé : {name}";
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+
+    private async void ExplorerNewFile_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = (ExplorerTree.SelectedItem as TreeViewItem)?.Tag as WorkspaceEntry;
+        await CreateWorkspaceEntryAsync(selected, directory: false);
+    }
+
+    private async void ExplorerNewFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = (ExplorerTree.SelectedItem as TreeViewItem)?.Tag as WorkspaceEntry;
+        await CreateWorkspaceEntryAsync(selected, directory: true);
+    }
+
+    private async void ExplorerRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        try { await RefreshExplorerAsync(); StatusMessage.Text = "Explorateur actualisé"; }
+        catch (Exception ex) { ShowError(ex); }
+    }
+
+    private async Task RenameWorkspaceEntryAsync(WorkspaceEntry entry)
+    {
+        if (_workspace is null) return;
+        if (entry.IsDirectory && _documents.Any(document => IsInsideWorkspace(document.Path, entry.FullPath)))
+        {
+            StatusMessage.Text = "Fermez d’abord les éditeurs ouverts dans ce dossier, puis réessayez.";
+            return;
+        }
+        var name = QuickPickWindow.Prompt(this, "Renommer", "Nouveau nom", entry.Name);
+        if (string.IsNullOrWhiteSpace(name) || name.Trim() == entry.Name) return;
+        try
+        {
+            var newPath = _workspace.RenameEntry(entry.RelativePath, name.Trim());
+            var document = _documents.FirstOrDefault(item => string.Equals(item.Path, entry.FullPath, StringComparison.OrdinalIgnoreCase));
+            if (document is not null)
+            {
+                document.Path = newPath;
+                document.Alias = null;
+                document.Language = WorkspaceService.GetFileKind(newPath).Language;
+                if (ReferenceEquals(document, _activeDocument)) await SendDocumentAsync(document);
+                StatusLanguage.Content = document.Language;
+            }
+            await RefreshExplorerAsync();
+            RefreshTabs();
+            StatusMessage.Text = $"Renommé : {name.Trim()}";
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+
+    private async Task DeleteWorkspaceEntryAsync(WorkspaceEntry entry)
+    {
+        if (_workspace is null) return;
+        var affected = _documents.Where(document => entry.IsDirectory
+            ? IsInsideWorkspace(document.Path, entry.FullPath)
+            : string.Equals(document.Path, entry.FullPath, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (affected.Count > 0)
+        {
+            StatusMessage.Text = "Fermez d’abord les éditeurs concernés avant de supprimer cette entrée.";
+            return;
+        }
+        var answer = MessageBox.Show(this, $"Supprimer {(entry.IsDirectory ? "le dossier et tout son contenu" : "le fichier")} « {entry.Name} » ?", "Confirmer la suppression", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (answer != MessageBoxResult.Yes) return;
+        try
+        {
+            _workspace.DeleteEntry(entry.RelativePath);
+            await RefreshExplorerAsync();
+            StatusMessage.Text = $"Supprimé : {entry.Name}";
+        }
+        catch (Exception ex) { ShowError(ex); }
     }
 
     private async void ExplorerTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)

@@ -275,11 +275,17 @@ internal sealed class QuickPickWindow : Window
         return window.ShowDialog() == true ? window.Tag?.ToString() : null;
     }
 
-    public static string? Prompt(Window owner, string title, string placeholder)
+    public static string? Prompt(Window owner, string title, string placeholder, string? initialValue = null)
     {
         var window = new QuickPickWindow(title, []) { Owner = owner };
         window._search.ToolTip = placeholder;
-        window._search.KeyDown += (sender, e) => { if (e.Key == Key.Enter && int.TryParse(window._search.Text, out var _)) { window.Tag = window._search.Text; window.DialogResult = true; } };
+        window._search.Text = initialValue ?? string.Empty;
+        window._search.KeyDown += (sender, e) =>
+        {
+            if (e.Key != Key.Enter || string.IsNullOrWhiteSpace(window._search.Text)) return;
+            window.Tag = window._search.Text.Trim();
+            window.DialogResult = true;
+        };
         return window.ShowDialog() == true ? window.Tag?.ToString() : null;
     }
 }
