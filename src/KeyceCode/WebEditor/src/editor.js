@@ -19,6 +19,7 @@
   const pendingAiCompletions = new Map();
   let completionSequence = 0;
   let aiCompletionEnabled = false;
+  let userSnippets = [];
 
   const post = (message) => {
     if (vscode) vscode.postMessage(message);
@@ -221,6 +222,27 @@
               triggerCharacter: context.triggerCharacter || null
             });
           });
+        }
+      });
+      monaco.languages.registerCompletionItemProvider(language, {
+        provideCompletionItems(model, position) {
+          const word = model.getWordUntilPosition(position);
+          const prefix = word.word || "";
+          const languageId = model.getLanguageId();
+          const suggestions = userSnippets
+            .filter((snippet) => (!snippet.scopes.length || snippet.scopes.some((scope) => scope.toLowerCase() === languageId.toLowerCase())) &&
+              snippet.prefix.toLowerCase().startsWith(prefix.toLowerCase()))
+            .map((snippet) => ({
+              label: snippet.label,
+              kind: monaco.languages.CompletionItemKind.Snippet,
+              detail: snippet.description || `Snippet · ${snippet.prefix}`,
+              documentation: snippet.body,
+              insertText: snippet.body,
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              sortText: `0_${snippet.prefix}`,
+              range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, position.column)
+            }));
+          return { suggestions };
         }
       });
 
@@ -544,6 +566,13 @@
           break;
         }
         case "setOptions": editor?.updateOptions(message.options || {}); break;
+        case "setUserSnippets": {
+          userSnippets = Array.isArray(message.snippets) ? message.snippets.slice(0, 500).filter((snippet) =>
+            snippet && typeof snippet.label === "string" && typeof snippet.prefix === "string" && snippet.prefix.length <= 256 &&
+            typeof snippet.body === "string" && snippet.body.length <= 32768 && typeof snippet.description === "string" &&
+            Array.isArray(snippet.scopes) && snippet.scopes.length <= 32 && snippet.scopes.every((scope) => typeof scope === "string" && scope.length <= 64)) : [];
+          break;
+        }
         case "executeCommand": void executeCommand(message); break;
         case "requestSave": requestSave(); break;
         case "requestFormat": post({

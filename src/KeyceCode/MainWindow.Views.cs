@@ -115,6 +115,7 @@ public partial class MainWindow
             ("Affichage: Recherche", () => ShowSearch_Click(sender, new RoutedEventArgs())),
             ("Affichage: Terminal", () => ShowTerminal_Click(sender, new RoutedEventArgs())),
             ("Exécuter: Démarrer", () => Run_Click(sender, new RoutedEventArgs())),
+            ("Terminal: Exécuter une tâche…", () => RunTask_Click(sender, new RoutedEventArgs())),
             ("KeyceIA: Ouvrir l’assistant", () => ToggleAssistant_Click(sender, new RoutedEventArgs())),
             ("Préférences: Thème de couleurs", () => Theme_Click(sender, new RoutedEventArgs()))
         ];
@@ -172,15 +173,19 @@ public partial class MainWindow
         try
         {
             var imported = VsCodeConfigurationImporter.Import(settingsPath, _editorPreferences);
+            var snippetDirectory = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(settingsPath))!, "snippets");
+            var snippets = _snippetService.ImportFromVsCode(snippetDirectory);
             _editorPreferences = imported.Preferences;
             _preferencesService.Save(_editorPreferences);
             FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
             if (imported.ThemeId is { } themeId)
                 ((App)Application.Current).ThemeService.SetTheme(Application.Current, themeId);
             await SendEditorOptionsAsync();
-            StatusMessage.Text = "Préférences VS Code importées";
+            await SendUserSnippetsAsync();
+            StatusMessage.Text = "Préférences et snippets VS Code importés";
             MessageBox.Show(this,
                 $"Préférences compatibles importées depuis :\n{imported.SourcePath}\n\n" +
+                $"{snippets.ImportedSnippets} snippet(s) importé(s) depuis {snippetDirectory} ({snippets.SkippedFiles} fichier(s) ignoré(s)).\n" +
                 $"{imported.ExtensionCount} extension(s) VS Code détectée(s) dans le profil local. Vous pouvez copier leurs paquets depuis la vue Extensions; ils resteront inactifs car KeyceCode n’a pas encore d’hôte d’extensions. Les raccourcis clavier personnalisés et thèmes tiers ne sont pas appliqués.",
                 "Import Visual Studio Code", MessageBoxButton.OK, MessageBoxImage.Information);
         }

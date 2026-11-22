@@ -15,6 +15,7 @@ public partial class MainWindow : Window
     private readonly GeminiService _gemini = new();
     private readonly EditorPreferencesService _preferencesService = new();
     private readonly WorkspaceSessionService _sessionService = new();
+    private readonly VsCodeSnippetService _snippetService = new();
     private EditorPreferences _editorPreferences;
     private readonly List<EditorDocument> _documents = [];
     private readonly List<string> _navigationHistory = [];
@@ -663,6 +664,7 @@ public partial class MainWindow : Window
                 var theme = ((App)Application.Current).ThemeService.CurrentTheme;
                 await PostEditorMessageAsync(new { type = "setTheme", theme = MonacoTheme(theme.Id) });
                 await SendEditorOptionsAsync();
+                await SendUserSnippetsAsync();
                 if (_activeDocument is not null) await SendDocumentAsync(_activeDocument);
                 else
                 {
@@ -922,6 +924,8 @@ public partial class MainWindow : Window
         });
         await PostEditorMessageAsync(new { type = "setAiCompletionEnabled", value = _editorPreferences.GeminiInlineCompletionEnabled });
     }
+
+    private Task SendUserSnippetsAsync() => PostEditorMessageAsync(new { type = "setUserSnippets", snippets = _snippetService.Load() });
 
     private static Brush ParseBrush(string color) => (Brush)new BrushConverter().ConvertFromString(color)!;
 
