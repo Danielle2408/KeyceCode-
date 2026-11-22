@@ -1,0 +1,25 @@
+:root {
+  color-scheme: dark;
+  --editor-bg: #1e1e1e;
+  --editor-fg: #d4d4d4;
+  --focus: #007fd4;
+  --gutter: #858585;
+  --selection: #264f78;
+}
+html, body, #editor { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--editor-bg); }
+body { color: var(--editor-fg); font-family: "Segoe UI", sans-serif; }
+#editor { position: absolute; inset: 0; }
+#loading {
+  position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center;
+  gap: 10px; background: var(--editor-bg); color: #a5a5a5; font-size: 13px;
+  transition: opacity 120ms ease;
+}
+#loading.ready { opacity: 0; pointer-events: none; }
+.spinner { width: 14px; height: 14px; border: 2px solid #505050; border-top-color: var(--focus); border-radius: 50%; animation: spin 700ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#error { position: absolute; inset: 16px; z-index: 10; padding: 16px; border: 1px solid #be1100; background: #3b1717; color: #ffd5d2; white-space: pre-wrap; font: 13px/1.5 "Segoe UI", sans-serif; }
+.monaco-editor, .monaco-editor .overflow-guard { border-radius: 0; }
+.monaco-editor .margin { background-color: var(--editor-bg) !important; }
+.monaco-editor .line-numbers { color: var(--gutter) !important; }
+.monaco-editor .cursor { border-left-width: 2px !important; }
+.monaco-editor .scroll-decoration { box-shadow: 0 6px 6px -6px rgba(0, 0, 0, .45); }

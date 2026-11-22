@@ -1,0 +1,261 @@
+(() => {
+  "use strict";
+
+  const vscode = window.chrome?.webview;
+  const loading = document.getElementById("loading");
+  const errorNode = document.getElementById("error");
+  let monacoApi;
+  let editor;
+  let activeDocument = { id: null, path: null, version: 0 };
+  let suppressChanges = false;
+  let contentTimer = 0;
+  const models = new Map();
+
+  const post = (message) => {
+    if (vscode) vscode.postMessage(message);
+    else window.parent.postMessage({ source: "keycecode-editor", ...message }, "*");
+  };
+
+  function reportError(error) {
+    errorNode.hidden = false;
+    errorNode.textContent = `Impossible d’initialiser l’éditeur Monaco.\n${error?.stack || error?.message || error}`;
+    post({ type: "editorError", message: String(error?.message || error) });
+  }
+
+  function modelUri(path, id) {
+    const safePath = String(path || `untitled-${id || "1"}`).replace(/\\/g, "/").replace(/^\/+/, "");
+    return monaco.Uri.parse(`file:///workspace/${safePath.split("/").map(encodeURIComponent).join("/")}`);
+  }
+
+  function notifyContentChanged() {
+    if (suppressChanges || !editor || !activeDocument.id) return;
+    window.clearTimeout(contentTimer);
+    contentTimer = window.setTimeout(() => {
+      const model = editor.getModel();
+      if (!model) return;
+      activeDocument.version += 1;
+      post({
+        type: "contentChanged",
+        id: activeDocument.id,
+        path: activeDocument.path,
+        text: model.getValue(),
+        version: activeDocument.version
+      });
+    }, 90);
+  }
+
+  function initialize(monaco) {
+    monacoApi = monaco;
+    window.monaco = monaco;
+    monaco.editor.defineTheme("keyce-night", {
+      base: "vs-dark",
+      inherit: true,
+      rules: [
+        { token: "comment", foreground: "6A9955", fontStyle: "italic" },
+        { token: "string", foreground: "CE9178" },
+        { token: "keyword", foreground: "C586C0" },
+        { token: "number", foreground: "B5CEA8" },
+        { token: "type.identifier", foreground: "4EC9B0" }
+      ],
+      colors: {
+        "editor.background": "#1E1E1E",
+        "editor.foreground": "#D4D4D4",
+        "editorLineNumber.foreground": "#858585",
+        "editorLineNumber.activeForeground": "#C6C6C6",
+        "editorCursor.foreground": "#AEAFAD",
+        "editor.selectionBackground": "#264F78",
+        "editor.inactiveSelectionBackground": "#3A3D41",
+        "editor.lineHighlightBackground": "#FFFFFF0A",
+        "editorIndentGuide.background1": "#404040",
+        "editorIndentGuide.activeBackground1": "#707070",
+        "editorGutter.background": "#1E1E1E",
+        "editorWidget.background": "#252526",
+        "editorWidget.border": "#454545",
+        "editorSuggestWidget.background": "#252526",
+        "editorSuggestWidget.border": "#454545",
+        "editorSuggestWidget.selectedBackground": "#04395E",
+        "editorOverviewRuler.border": "#7F7F7F4D",
+        "scrollbarSlider.background": "#79797966",
+        "scrollbarSlider.hoverBackground": "#646464B3",
+        "scrollbarSlider.activeBackground": "#BFBFBF66"
+      }
+    });
+
+    editor = monaco.editor.create(document.getElementById("editor"), {
+      value: "",
+      language: "plaintext",
+      theme: "keyce-night",
+      automaticLayout: true,
+      fontFamily: "Cascadia Code, Consolas, monospace",
+      fontSize: 14,
+      lineHeight: 21,
+      fontLigatures: false,
+      minimap: { enabled: true, side: "right", renderCharacters: false, maxColumn: 120 },
+      lineNumbers: "on",
+      renderLineHighlight: "all",
+      renderWhitespace: "selection",
+      guides: { indentation: true, highlightActiveIndentation: true, bracketPairs: true },
+      bracketPairColorization: { enabled: true, independentColorPoolPerBracketType: true },
+      smoothScrolling: true,
+      cursorBlinking: "smooth",
+      cursorSmoothCaretAnimation: "on",
+      scrollBeyondLastLine: false,
+      tabSize: 4,
+      insertSpaces: true,
+      wordWrap: "off",
+      padding: { top: 10, bottom: 10 },
+      stickyScroll: { enabled: true },
+      unicodeHighlight: { ambiguousCharacters: false }
+    });
+
+    editor.onDidChangeModelContent(notifyContentChanged);
+    editor.onDidChangeCursorSelection((event) => {
+      if (!activeDocument.id) return;
+      const selection = event.selection;
+      post({
+        type: "cursorChanged",
+        id: activeDocument.id,
+        line: selection.positionLineNumber,
+        column: selection.positionColumn,
+        selection: {
+          startLine: selection.startLineNumber,
+          startColumn: selection.startColumn,
+          endLine: selection.endLineNumber,
+          endColumn: selection.endColumn
+        },
+        selectedText: editor.getModel()?.getValueInRange(selection) || ""
+      });
+    });
+
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => requestSave());
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => post({ type: "command", command: "find" }));
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH, () => post({ type: "command", command: "replace" }));
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, () => post({ type: "command", command: "quickOpen" }));
+
+    loading.classList.add("ready");
+    post({ type: "ready", capabilities: ["monaco", "models", "multicursor", "format-request", "theme", "options"] });
+    editor.focus();
+  }
+
+  function requestSave() {
+    if (!editor || !activeDocument.id) return;
+    post({
+      type: "requestSave",
+      id: activeDocument.id,
+      path: activeDocument.path,
+      text: editor.getValue(),
+      version: activeDocument.version
+    });
+  }
+
+  function setDocument(message) {
+    if (!editor) return;
+    window.clearTimeout(contentTimer);
+    suppressChanges = true;
+    try {
+      const id = String(message.id || message.path || "untitled");
+      const uri = modelUri(message.path, id);
+      const key = uri.toString();
+      let model = models.get(key);
+      if (!model || model.isDisposed()) {
+        model = monaco.editor.createModel(String(message.text || ""), message.language || "plaintext", uri);
+        models.set(key, model);
+      } else if (message.text !== undefined && model.getValue() !== message.text) {
+        model.setValue(String(message.text));
+      }
+      monaco.editor.setModelLanguage(model, message.language || "plaintext");
+      editor.setModel(model);
+      activeDocument = {
+        id,
+        path: message.path || null,
+        version: Number.isFinite(message.version) ? message.version : 0
+      };
+      if (message.options) editor.updateOptions(message.options);
+      if (message.theme) monaco.editor.setTheme(message.theme);
+      editor.focus();
+    } finally {
+      suppressChanges = false;
+    }
+  }
+
+  async function executeCommand(message) {
+    const command = String(message.command || "");
+    const builtIn = {
+      undo: "undo",
+      redo: "redo",
+      find: "actions.find",
+      replace: "editor.action.startFindReplaceAction",
+      formatDocument: "editor.action.formatDocument",
+      formatSelection: "editor.action.formatSelection",
+      commentLine: "editor.action.commentLine",
+      uncommentLine: "editor.action.removeCommentLine",
+      fold: "editor.fold",
+      unfold: "editor.unfold",
+      selectAll: "editor.action.selectAll"
+    }[command];
+    const action = editor.getAction(builtIn || command);
+    if (action) { await action.run(message.args); return; }
+    post({ type: "command", command, args: message.args || null });
+  }
+
+  window.keyce = {
+    dispatch(message) {
+      if (!message || typeof message !== "object") return;
+      switch (message.type) {
+        case "setDocument": setDocument(message); break;
+        case "setTheme": monacoApi?.editor.setTheme(message.theme || "keyce-night"); break;
+        case "setLanguage": {
+          const model = editor?.getModel();
+          if (model && typeof message.language === "string") monacoApi.editor.setModelLanguage(model, message.language);
+          break;
+        }
+        case "setOptions": editor?.updateOptions(message.options || {}); break;
+        case "executeCommand": void executeCommand(message); break;
+        case "requestSave": requestSave(); break;
+        case "requestFormat": post({
+          type: "requestFormat",
+          id: activeDocument.id,
+          path: activeDocument.path,
+          language: editor?.getModel()?.getLanguageId() || "plaintext",
+          text: editor?.getValue() || ""
+        }); break;
+        case "applyEdit": {
+          if (!editor || typeof message.text !== "string") break;
+          const model = editor.getModel();
+          const selections = message.select;
+          model.pushEditOperations([], [{ range: model.getFullModelRange(), text: message.text }], () => null);
+          if (selections) editor.setSelection(selections);
+          editor.focus();
+          break;
+        }
+        case "setDiagnostics": {
+          const model = editor?.getModel();
+          if (model) monacoApi.editor.setModelMarkers(model, "keycecode", message.markers || []);
+          break;
+        }
+        case "setReadOnly": editor?.updateOptions({ readOnly: Boolean(message.value) }); break;
+        case "insertTextAtCursor": {
+          if (!editor || typeof message.text !== "string") break;
+          editor.pushUndoStop();
+          editor.executeEdits("keyceia", [{ range: editor.getSelection(), text: message.text, forceMoveMarkers: true }]);
+          editor.pushUndoStop();
+          editor.focus();
+          break;
+        }
+        case "focus": editor?.focus(); break;
+        case "layout": editor?.layout(); break;
+        default: post({ type: "editorError", message: `Message hôte inconnu : ${message.type}` });
+      }
+    },
+    getValue() { return editor?.getValue() || ""; },
+    getSelection() { return editor?.getSelection() || null; }
+  };
+
+  if (vscode) vscode.addEventListener("message", (event) => window.keyce.dispatch(event.data));
+  else window.addEventListener("message", (event) => {
+    if (event.data?.target === "keycecode-editor") window.keyce.dispatch(event.data.message);
+  });
+
+  require.config({ paths: { vs: "./vs" } });
+  require(["vs/editor/editor.main"], initialize, reportError);
+})();

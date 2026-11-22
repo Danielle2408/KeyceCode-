@@ -1,0 +1,14 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ResourceDictionary.MergedDictionaries><ResourceDictionary Source="/KeyceCode;component/Themes/ThemeStyles.xaml"/></ResourceDictionary.MergedDictionaries>
+  <SolidColorBrush x:Key="WindowBackground" Color="#FFFFFFFF"/><SolidColorBrush x:Key="AppBackground" Color="#FFFFFFFF"/>
+  <SolidColorBrush x:Key="PanelBackground" Color="#FFFFFFFF"/><SolidColorBrush x:Key="SidebarBackground" Color="#FFFFFFFF"/>
+  <SolidColorBrush x:Key="ActivityBarBackground" Color="#FFFFFFFF"/><SolidColorBrush x:Key="TitleBarBackground" Color="#FFFFFFFF"/>
+  <SolidColorBrush x:Key="TabBarBackground" Color="#FFFFFFFF"/><SolidColorBrush x:Key="TabActiveBackground" Color="#FFFFFFFF"/>
+  <SolidColorBrush x:Key="StatusBarBackground" Color="#FFFFFFFF"/><SolidColorBrush x:Key="BorderBrush" Color="#FF000000"/>
+  <SolidColorBrush x:Key="ForegroundBrush" Color="#FF000000"/><SolidColorBrush x:Key="MutedBrush" Color="#FF202020"/>
+  <SolidColorBrush x:Key="AccentBrush" Color="#FF0000A0"/><SolidColorBrush x:Key="EditorBackground" Color="#FFFFFFFF"/>
+  <SolidColorBrush x:Key="EditorForeground" Color="#FF000000"/><SolidColorBrush x:Key="HoverBackground" Color="#FFE8E8E8"/>
+  <SolidColorBrush x:Key="SelectionBackground" Color="#FFADD6FF"/><SolidColorBrush x:Key="ErrorBrush" Color="#FFC00000"/>
+  <SolidColorBrush x:Key="WarningBrush" Color="#FF705000"/><SolidColorBrush x:Key="SuccessBrush" Color="#FF006000"/>
+  <SolidColorBrush x:Key="KeyceAccentBrush" Color="#FF8A3600"/>
+</ResourceDictionary>

@@ -1,0 +1,12 @@
+{
+  "name": "keycecode-editor-shell",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Offline Monaco assets for the KeyceCode WPF WebView2 editor.",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "monaco-editor": "0.57.0"
+  }
+}
