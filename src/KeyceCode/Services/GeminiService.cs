@@ -55,10 +55,10 @@ public sealed class GeminiService : IDisposable
             "Retourne uniquement le texte à insérer, sans bloc Markdown ni explication. " +
             "Respecte le langage, le style et le contexte existants.\n" + languageHint +
             "Contexte de code :\n" + source,
-            cancellationToken);
+            cancellationToken, preserveWhitespace: true);
     }
 
-    private async Task<string> GenerateAsync(string prompt, CancellationToken cancellationToken)
+    private async Task<string> GenerateAsync(string prompt, CancellationToken cancellationToken, bool preserveWhitespace = false)
     {
         var apiKey = _explicitApiKey ?? _credentialStore.Read() ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY");
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -112,7 +112,8 @@ public sealed class GeminiService : IDisposable
                     foreach (var part in parts.EnumerateArray())
                         if (part.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String)
                             result.Append(text.GetString());
-                    if (result.Length > 0) return result.ToString().Trim();
+                    if (result.Length > 0)
+                        return preserveWhitespace ? result.ToString() : result.ToString().Trim();
                 }
             }
 

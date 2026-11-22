@@ -22,6 +22,8 @@ public partial class MainWindow : Window
     private bool _navigatingHistory;
     private readonly Dictionary<string, Uri> _lspDocumentUris = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, LspDiagnostics> _lspDiagnostics = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CancellationTokenSource> _geminiInlineRequests = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (int Version, int Offset)> _editorSnapshots = new(StringComparer.Ordinal);
     private LanguageServerHost? _languageServer;
     private WorkspaceService? _workspace;
     private EditorDocument? _activeDocument;
@@ -59,6 +61,9 @@ public partial class MainWindow : Window
     private async void MainWindow_Closed(object? sender, EventArgs e)
     {
         _autoSaveTimer.Stop();
+        foreach (var request in _geminiInlineRequests.Values) request.Cancel();
+        _geminiInlineRequests.Clear();
+        _gemini.Dispose();
         if (_languageServer is not null)
         {
             try { await _languageServer.DisposeAsync(); }
@@ -409,6 +414,10 @@ public partial class MainWindow : Window
                 if (doc is not null && !_syncingDocument)
                 {
                     doc.Text = ReadString(root, "text") ?? doc.Text;
+                    var version = ReadInt(root, "version", 0);
+                    var offset = _editorSnapshots.TryGetValue(doc.Id, out var snapshot) ? snapshot.Offset : 0;
+                    _editorSnapshots[doc.Id] = (version, Math.Min(offset, doc.Text.Length));
+                    CancelInlineRequestsForDocument(doc.Id);
                     doc.IsDirty = true;
                     RefreshTabs();
                     if (_languageServer is not null && _lspDocumentUris.TryGetValue(doc.Id, out var lspUri))
@@ -420,11 +429,19 @@ public partial class MainWindow : Window
                 }
             }
             else if (type == "lspCompletionRequest") await HandleLspCompletionRequestAsync(root);
+            else if (type == "geminiInlineCompletionRequest") await HandleGeminiInlineCompletionRequestAsync(root);
+            else if (type == "geminiInlineCompletionCancel") CancelInlineRequest(ReadString(root, "requestId"));
             else if (type == "cursorChanged")
             {
                 StatusCursor.Content = $"Ln {ReadInt(root, "line", 1)}, Col {ReadInt(root, "column", 1)}";
                 _selectedText = ReadString(root, "selectedText");
                 _cursorOffset = Math.Clamp(ReadInt(root, "offset", _cursorOffset), 0, _activeDocument?.Text.Length ?? 0);
+                if (_activeDocument is { } active && ReadString(root, "id") == active.Id)
+                {
+                    var version = ReadInt(root, "version", 0);
+                    _editorSnapshots[active.Id] = (version, _cursorOffset);
+                    CancelInlineRequestsForDocument(active.Id);
+                }
             }
             else if (type == "requestSave")
             {
@@ -488,6 +505,76 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task HandleGeminiInlineCompletionRequestAsync(JsonElement message)
+    {
+        var requestId = ReadString(message, "requestId");
+        var documentId = ReadString(message, "id");
+        var version = ReadInt(message, "version", -1);
+        var offset = ReadInt(message, "offset", -1);
+        var prefix = ReadString(message, "prefix");
+        var language = ReadString(message, "language") ?? "plaintext";
+        var document = _activeDocument;
+        if (string.IsNullOrWhiteSpace(requestId) || string.IsNullOrWhiteSpace(documentId) || prefix is null ||
+            !_editorPreferences.GeminiInlineCompletionEnabled || document is null || document.Id != documentId ||
+            ReadBool(message, "selectionEmpty") != true || !string.IsNullOrEmpty(_selectedText) ||
+            offset < 0 || offset > document.Text.Length || prefix.Length > 4000)
+        {
+            await PostEditorMessageAsync(new { type = "geminiInlineCompletionResult", requestId, text = "", version, offset, id = documentId });
+            return;
+        }
+
+        var expectedPrefix = document.Text[..offset];
+        if (expectedPrefix.Length > 4000) expectedPrefix = expectedPrefix[^4000..];
+        if (!string.Equals(prefix, expectedPrefix, StringComparison.Ordinal) ||
+            !_editorSnapshots.TryGetValue(documentId, out var snapshot) ||
+            snapshot.Version != version || snapshot.Offset != offset)
+        {
+            await PostEditorMessageAsync(new { type = "geminiInlineCompletionResult", requestId, text = "", version, offset, id = documentId });
+            return;
+        }
+
+        CancelInlineRequest(requestId);
+        var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        _geminiInlineRequests[requestId] = cancellation;
+        try
+        {
+            var completion = await _gemini.CompleteAsync(prefix, language, cancellation.Token);
+            if (cancellation.IsCancellationRequested || !_editorPreferences.GeminiInlineCompletionEnabled ||
+                !ReferenceEquals(document, _activeDocument) ||
+                !_editorSnapshots.TryGetValue(documentId, out var latest) || latest.Version != version || latest.Offset != offset)
+                return;
+            await PostEditorMessageAsync(new { type = "geminiInlineCompletionResult", requestId, text = completion, version, offset, id = documentId });
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            if (!cancellation.IsCancellationRequested)
+            {
+                StatusMessage.Text = "KeyceIA : autocomplétion indisponible";
+                await PostEditorMessageAsync(new { type = "geminiInlineCompletionResult", requestId, text = "", version, offset, id = documentId, error = ex.Message });
+            }
+        }
+        finally
+        {
+            if (_geminiInlineRequests.TryGetValue(requestId, out var active) && ReferenceEquals(active, cancellation))
+                _geminiInlineRequests.Remove(requestId);
+            cancellation.Dispose();
+        }
+    }
+
+    private void CancelInlineRequestsForDocument(string documentId)
+    {
+        foreach (var (requestId, cancellation) in _geminiInlineRequests.ToArray())
+            if (requestId.StartsWith(documentId + ":", StringComparison.Ordinal))
+                cancellation.Cancel();
+    }
+
+    private void CancelInlineRequest(string? requestId)
+    {
+        if (requestId is not null && _geminiInlineRequests.TryGetValue(requestId, out var cancellation))
+            cancellation.Cancel();
+    }
+
     private EditorDocument? FindDocument(JsonElement message)
     {
         var id = ReadString(message, "id");
@@ -499,6 +586,9 @@ public partial class MainWindow : Window
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     private static int ReadInt(JsonElement element, string name, int fallback) =>
         element.TryGetProperty(name, out var value) && value.TryGetInt32(out var number) ? number : fallback;
+    private static bool? ReadBool(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? value.GetBoolean() : null;
 
     private async Task PostEditorMessageAsync(object message)
     {
@@ -529,20 +619,24 @@ public partial class MainWindow : Window
         StatusLanguage.Content = document.Language;
     }
 
-    private Task SendEditorOptionsAsync() => PostEditorMessageAsync(new
+    private async Task SendEditorOptionsAsync()
     {
-        type = "setOptions",
-        options = new
+        await PostEditorMessageAsync(new
         {
-            fontFamily = _editorPreferences.FontFamily,
-            fontSize = _editorPreferences.FontSize,
-            tabSize = _editorPreferences.TabSize,
-            insertSpaces = _editorPreferences.InsertSpaces,
-            wordWrap = _editorPreferences.WordWrap ? "on" : "off",
-            minimap = new { enabled = _editorPreferences.Minimap },
-            fontLigatures = _editorPreferences.FontLigatures
-        }
-    });
+            type = "setOptions",
+            options = new
+            {
+                fontFamily = _editorPreferences.FontFamily,
+                fontSize = _editorPreferences.FontSize,
+                tabSize = _editorPreferences.TabSize,
+                insertSpaces = _editorPreferences.InsertSpaces,
+                wordWrap = _editorPreferences.WordWrap ? "on" : "off",
+                minimap = new { enabled = _editorPreferences.Minimap },
+                fontLigatures = _editorPreferences.FontLigatures
+            }
+        });
+        await PostEditorMessageAsync(new { type = "setAiCompletionEnabled", value = _editorPreferences.GeminiInlineCompletionEnabled });
+    }
 
     private static Brush ParseBrush(string color) => (Brush)new BrushConverter().ConvertFromString(color)!;
 

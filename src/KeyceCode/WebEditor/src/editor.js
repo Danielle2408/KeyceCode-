@@ -12,7 +12,9 @@
   const models = new Map();
   const documentMarkers = new Map();
   const pendingCompletions = new Map();
+  const pendingAiCompletions = new Map();
   let completionSequence = 0;
+  let aiCompletionEnabled = false;
 
   const post = (message) => {
     if (vscode) vscode.postMessage(message);
@@ -32,11 +34,12 @@
 
   function notifyContentChanged() {
     if (suppressChanges || !editor || !activeDocument.id) return;
+    cancelAiCompletions();
     window.clearTimeout(contentTimer);
     contentTimer = window.setTimeout(() => {
       const model = editor.getModel();
       if (!model) return;
-      activeDocument.version += 1;
+      activeDocument.version = model.getVersionId();
       post({
         type: "contentChanged",
         id: activeDocument.id,
@@ -128,6 +131,7 @@
       cursorSmoothCaretAnimation: "on",
       scrollBeyondLastLine: false,
       tabSize: 4,
+      inlineSuggest: { enabled: true, mode: "subword" },
       insertSpaces: true,
       wordWrap: "off",
       padding: { top: 10, bottom: 10 },
@@ -137,6 +141,7 @@
 
     editor.onDidChangeModelContent(notifyContentChanged);
     editor.onDidChangeCursorSelection((event) => {
+      cancelAiCompletions();
       if (!activeDocument.id) return;
       const selection = event.selection;
       post({
@@ -145,6 +150,7 @@
         line: selection.positionLineNumber,
         column: selection.positionColumn,
         offset: editor.getModel()?.getOffsetAt(selection.getPosition()) || 0,
+        version: editor.getModel()?.getVersionId() || 0,
         selection: {
           startLine: selection.startLineNumber,
           startColumn: selection.startColumn,
@@ -209,6 +215,80 @@
       });
     }
 
+    // Opt-in Gemini ghost text. LSP suggestions above remain a separate provider.
+    monaco.languages.registerInlineCompletionsProvider(
+      ["csharp", "javascript", "javascriptreact", "typescript", "typescriptreact", "json", "jsonc", "html", "css", "scss", "powershell", "python", "go", "rust", "java", "cpp", "markdown", "plaintext"],
+      {
+        async provideInlineCompletions(model, position, _context, token) {
+          if (!aiCompletionEnabled || !vscode || !activeDocument.id || editor.getModel() !== model) return { items: [] };
+          const selected = editor.getSelection();
+          if (!selected || !selected.isEmpty()) return { items: [] };
+
+          let debounceSubscription;
+          const mayContinue = await new Promise((resolve) => {
+            const timer = window.setTimeout(() => { debounceSubscription?.dispose(); resolve(true); }, 550);
+            debounceSubscription = token.onCancellationRequested(() => {
+              window.clearTimeout(timer);
+              debounceSubscription?.dispose();
+              resolve(false);
+            });
+          });
+          debounceSubscription?.dispose();
+          if (!mayContinue || token.isCancellationRequested) return { items: [] };
+
+          const currentSelection = editor.getSelection();
+          if (!aiCompletionEnabled || editor.getModel() !== model || !currentSelection?.isEmpty() ||
+              currentSelection.positionLineNumber !== position.lineNumber || currentSelection.positionColumn !== position.column)
+            return { items: [] };
+
+          const version = model.getVersionId();
+          const offset = model.getOffsetAt(position);
+          let prefix = model.getValue().slice(0, offset);
+          if (prefix.length > 4000) prefix = prefix.slice(-4000);
+          if (!prefix.trim()) return { items: [] };
+          const documentId = activeDocument.id;
+          const requestId = `${documentId}:${++completionSequence}`;
+
+          return await new Promise((resolve) => {
+            let settled = false;
+            let requestSubscription;
+            let timeout = window.setTimeout(() => {
+              post({ type: "geminiInlineCompletionCancel", requestId });
+              finish({ items: [] });
+            }, 12000);
+            const finish = (result) => {
+              if (settled) return;
+              settled = true;
+              window.clearTimeout(timeout);
+              requestSubscription?.dispose();
+              pendingAiCompletions.delete(requestId);
+              resolve(result);
+            };
+            requestSubscription = token.onCancellationRequested(() => {
+              post({ type: "geminiInlineCompletionCancel", requestId });
+              finish({ items: [] });
+            });
+            pendingAiCompletions.set(requestId, (message) => {
+              if (token.isCancellationRequested || !aiCompletionEnabled || editor.getModel() !== model ||
+                  activeDocument.id !== documentId || model.getVersionId() !== version ||
+                  !editor.getPosition() || model.getOffsetAt(editor.getPosition()) !== offset || message.version !== version ||
+                  message.offset !== offset || message.id !== documentId || typeof message.text !== "string" || !message.text.trim()) {
+                finish({ items: [] });
+                return;
+              }
+              finish({ items: [{
+                insertText: message.text,
+                range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column)
+              }] });
+            });
+            post({ type: "geminiInlineCompletionRequest", requestId, id: documentId, version, offset,
+              language: model.getLanguageId(), prefix, selectionEmpty: true });
+          });
+        },
+        freeInlineCompletions() {}
+      }
+    );
+
     loading.classList.add("ready");
     post({ type: "ready", capabilities: ["monaco", "models", "multicursor", "format-request", "theme", "options"] });
     editor.focus();
@@ -221,8 +301,15 @@
       id: activeDocument.id,
       path: activeDocument.path,
       text: editor.getValue(),
-      version: activeDocument.version
+      version: editor.getModel()?.getVersionId() || activeDocument.version
     });
+  }
+
+  function cancelAiCompletions() {
+    for (const [requestId, resolve] of pendingAiCompletions) {
+      post({ type: "geminiInlineCompletionCancel", requestId });
+      resolve({ id: null, version: -1, offset: -1, text: "" });
+    }
   }
 
   function setDocument(message) {
@@ -242,10 +329,11 @@
       }
       monaco.editor.setModelLanguage(model, message.language || "plaintext");
       editor.setModel(model);
+      cancelAiCompletions();
       activeDocument = {
         id,
         path: message.path || null,
-        version: Number.isFinite(message.version) ? message.version : 0
+        version: model.getVersionId()
       };
       if (message.options) editor.updateOptions(message.options);
       if (message.theme) monaco.editor.setTheme(message.theme);
@@ -353,6 +441,17 @@
             pendingCompletions.delete(message.requestId);
             resolve(message);
           }
+          break;
+        }
+        case "setAiCompletionEnabled": {
+          aiCompletionEnabled = message.value === true;
+          if (!aiCompletionEnabled) cancelAiCompletions();
+          editor?.updateOptions({ inlineSuggest: { enabled: aiCompletionEnabled } });
+          break;
+        }
+        case "geminiInlineCompletionResult": {
+          const resolve = pendingAiCompletions.get(message.requestId);
+          if (resolve) resolve(message);
           break;
         }
         case "setReadOnly": editor?.updateOptions({ readOnly: Boolean(message.value) }); break;

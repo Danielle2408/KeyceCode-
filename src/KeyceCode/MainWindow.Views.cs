@@ -155,6 +155,8 @@ public partial class MainWindow
         if (settings.ShowDialog() != true) return;
         _editorPreferences = settings.Preferences;
         _preferencesService.Save(_editorPreferences);
+        if (!_editorPreferences.GeminiInlineCompletionEnabled)
+            foreach (var request in _geminiInlineRequests.Values) request.Cancel();
         FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
         try
         {
@@ -341,6 +343,7 @@ internal sealed class SettingsWindow : Window
     private readonly CheckBox _ligatures = new();
     private readonly CheckBox _autoSave = new();
     private readonly CheckBox _formatOnSave = new();
+    private readonly CheckBox _geminiInlineCompletion = new();
     private readonly ComboBox _theme = new();
     private readonly TextBox _search = new();
     private readonly PasswordBox _geminiKey = new();
@@ -389,6 +392,16 @@ internal sealed class SettingsWindow : Window
         _autoSave.Content = "Sauvegarder automatiquement après 1 seconde"; _autoSave.IsChecked = initial.AutoSave; content.Children.Add(Row("Sauvegarde", _autoSave));
         _formatOnSave.Content = "Formater avec le serveur LSP avant chaque sauvegarde"; _formatOnSave.IsChecked = initial.FormatOnSave; content.Children.Add(Row("Formatage", _formatOnSave));
         content.Children.Add(new TextBlock { Text = "KeyceIA", FontSize = 16, Margin = new Thickness(0, 18, 0, 8) });
+        _geminiInlineCompletion.Content = "Activer les suggestions Gemini inline pendant la frappe";
+        _geminiInlineCompletion.IsChecked = initial.GeminiInlineCompletionEnabled;
+        content.Children.Add(Row("Autocomplétion Gemini", _geminiInlineCompletion));
+        var inlineHelp = new TextBlock
+        {
+            Text = "Désactivé par défaut. Lorsque cette option est activée, seul le code avant le curseur (jusqu’à 4 000 caractères) est envoyé à Gemini après une courte pause. La sélection et le reste du fichier ne sont pas envoyés. Échap annule la suggestion, Tab l’accepte.",
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 2, 2, 10), Tag = "Autocomplétion Gemini"
+        };
+        inlineHelp.SetResourceReference(ForegroundProperty, "MutedBrush");
+        content.Children.Add(inlineHelp);
         var keyHelp = new TextBlock { Text = hasGeminiKey
             ? "Une clé Gemini est enregistrée de manière chiffrée pour votre compte Windows. Saisissez une nouvelle clé pour la remplacer."
             : "Saisissez une clé Gemini. Elle sera chiffrée avec DPAPI pour votre compte Windows. GEMINI_API_KEY reste disponible pour le développement.",
@@ -432,7 +445,8 @@ internal sealed class SettingsWindow : Window
             Minimap = _minimap.IsChecked == true,
             FontLigatures = _ligatures.IsChecked == true,
             AutoSave = _autoSave.IsChecked == true,
-            FormatOnSave = _formatOnSave.IsChecked == true
+            FormatOnSave = _formatOnSave.IsChecked == true,
+            GeminiInlineCompletionEnabled = _geminiInlineCompletion.IsChecked == true
         };
         DialogResult = true;
     }

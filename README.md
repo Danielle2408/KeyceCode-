@@ -29,13 +29,15 @@ dotnet build src/KeyceCode/KeyceCode.csproj --configuration Release
 - Terminal PowerShell/cmd persistant via processus redirigé, profils de base, exécution de fichiers/projets .NET, Python, JavaScript et PowerShell. Ce terminal n’utilise pas encore ConPTY/xterm.js.
 - Git : branche/état, stage/unstage/discard par menu contextuel, commit des fichiers déjà stagés.
 - Galerie Open VSX intégrée : recherche, détails et téléchargement VSIX Windows dans `%LOCALAPPDATA%\KeyceCode\extensions\downloads`. Depuis la vue Extensions, **Installer un VSIX téléchargé** ouvre un sélecteur local et installe une archive VSIX dans `%USERPROFILE%\.keycecode\extensions`; les extensions présentes sont listées comme inactives.
-- Client Gemini KeyceIA pour chat et insertion de suggestion au curseur.
+- Client Gemini KeyceIA pour chat, insertion de suggestion au curseur et suggestions ghost text inline. Cette dernière fonction reste désactivée par défaut et s’active dans Paramètres; LSP/IntelliSense standard est distinct.
 - Serveur LSP configurable par variables d’environnement : completion standard, diagnostics vers les marqueurs Monaco et Problems, synchronisation des documents ouverts.
 - Préférence « Formater avant l’enregistrement », distincte d’AutoSave : utilise `textDocument/formatting` si le serveur LSP annonce `documentFormattingProvider`. Si le serveur est absent, annule ou renvoie des éditions invalides, le texte d’origine reste intact et est sauvegardé.
 
 ## Gemini
 
 Vous pouvez saisir la clé dans **Paramètres > KeyceIA** : elle est chiffrée avec DPAPI pour le compte Windows courant, jamais réaffichée et effaçable depuis ce même écran. `GEMINI_API_KEY` reste disponible comme solution de repli pour le développement. Le modèle est configurable via `GEMINI_MODEL`.
+
+L’autocomplétion Gemini pendant la frappe est **désactivée par défaut**. Activez **Paramètres > Autocomplétion Gemini** pour l’autoriser. Après une courte pause, seule la partie du fichier située avant le curseur, limitée aux 4 000 derniers caractères, est envoyée; la sélection et le reste du fichier ne sont pas inclus. Le texte fantôme s’accepte avec Tab et se rejette avec Échap. Tout déplacement du curseur, changement du document ou modification du texte annule les requêtes en cours. Cette option ne remplace pas la complétion LSP.
 
 Les clés qui ont été collées dans la conversation doivent être révoquées et remplacées. Ne les ajoutez ni au dépôt, ni aux journaux, ni aux captures.
 

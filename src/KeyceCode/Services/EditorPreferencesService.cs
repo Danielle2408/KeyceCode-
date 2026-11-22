@@ -14,6 +14,8 @@ public sealed record EditorPreferences
     public bool FontLigatures { get; init; }
     public bool AutoSave { get; init; }
     public bool FormatOnSave { get; init; }
+    /// <summary>Gemini is never contacted while typing unless the user opts in.</summary>
+    public bool GeminiInlineCompletionEnabled { get; init; }
 }
 
 /// <summary>Persists non-secret editor preferences in the current user's AppData directory.</summary>
