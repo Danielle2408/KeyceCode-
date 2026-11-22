@@ -320,14 +320,20 @@
             };
           }).filter(Boolean).sort((a, b) => b.start - a.start);
           editor.pushUndoStop();
-          for (const edit of edits) {
-            const range = {
-              startLineNumber: model.getPositionAt(edit.start).lineNumber,
-              startColumn: model.getPositionAt(edit.start).column,
-              endLineNumber: model.getPositionAt(edit.end).lineNumber,
-              endColumn: model.getPositionAt(edit.end).column
-            };
-            editor.executeEdits("lsp-format", [{ range, text: edit.text, forceMoveMarkers: true }]);
+          const priorSuppression = suppressChanges;
+          if (message.suppressChanges === true) suppressChanges = true;
+          try {
+            for (const edit of edits) {
+              const range = {
+                startLineNumber: model.getPositionAt(edit.start).lineNumber,
+                startColumn: model.getPositionAt(edit.start).column,
+                endLineNumber: model.getPositionAt(edit.end).lineNumber,
+                endColumn: model.getPositionAt(edit.end).column
+              };
+              editor.executeEdits("lsp-format", [{ range, text: edit.text, forceMoveMarkers: true }]);
+            }
+          } finally {
+            suppressChanges = priorSuppression;
           }
           editor.pushUndoStop();
           editor.focus();

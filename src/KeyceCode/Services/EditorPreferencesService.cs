@@ -13,6 +13,7 @@ public sealed record EditorPreferences
     public bool Minimap { get; init; } = true;
     public bool FontLigatures { get; init; }
     public bool AutoSave { get; init; }
+    public bool FormatOnSave { get; init; }
 }
 
 /// <summary>Persists non-secret editor preferences in the current user's AppData directory.</summary>

@@ -2,6 +2,7 @@ using KeyceCode.Services;
 using Microsoft.Win32;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -379,6 +380,9 @@ public partial class MainWindow
         }
         try
         {
+            var formatNote = _editorPreferences.FormatOnSave
+                ? await FormatDocumentBeforeSaveAsync(document)
+                : null;
             var text = NormalizeLineEndings(document.Text, document.LineEnding);
             if (_workspace is not null && IsInsideWorkspace(document.Path, _workspace.RootPath))
                 await _workspace.WriteFileAsync(document.Path, text, GetTextEncoding(document.EncodingId));
@@ -386,9 +390,111 @@ public partial class MainWindow
             await EnsureLspDocumentAsync(document);
             if (_languageServer is not null && _lspDocumentUris.TryGetValue(document.Id, out var lspUri))
                 await _languageServer.SaveDocumentAsync(lspUri, document.Text);
-            document.IsDirty = false; document.IsPreview = false; RefreshTabs(); UpdateFileStatus(document); StatusMessage.Text = "Fichier enregistré"; return true;
+            document.IsDirty = false; document.IsPreview = false; RefreshTabs(); UpdateFileStatus(document);
+            StatusMessage.Text = formatNote ?? "Fichier enregistré";
+            return true;
         }
         catch (Exception ex) { ShowError(ex); return false; }
+    }
+
+    private async Task<string?> FormatDocumentBeforeSaveAsync(EditorDocument document)
+    {
+        var server = _languageServer;
+        if (server is null || !server.IsInitialized || _workspace is null ||
+            string.IsNullOrWhiteSpace(document.Path) || !IsInsideWorkspace(document.Path, _workspace.RootPath))
+            return "Fichier enregistré · formatage ignoré (aucun serveur LSP configuré)";
+
+        try
+        {
+            await EnsureLspDocumentAsync(document);
+            if (!_lspDocumentUris.TryGetValue(document.Id, out var uri))
+                return "Fichier enregistré · aucun document LSP ouvert pour le formatage";
+
+            var capabilities = server.ServerCapabilities;
+            if (!capabilities.TryGetProperty("documentFormattingProvider", out var provider) ||
+                provider.ValueKind is not (JsonValueKind.True or JsonValueKind.Object))
+                return "Fichier enregistré · le serveur LSP n’annonce pas de formateur";
+
+            // Send the latest buffer first: the save keystroke can arrive before Monaco's debounce didChange.
+            await server.ChangeDocumentAsync(uri, document.Text);
+            var edits = await server.RequestAsync("textDocument/formatting", new
+            {
+                textDocument = new { uri = uri.AbsoluteUri },
+                options = new { tabSize = _editorPreferences.TabSize, insertSpaces = _editorPreferences.InsertSpaces }
+            });
+            if (edits.ValueKind != JsonValueKind.Array || edits.GetArrayLength() == 0)
+                return "Fichier enregistré · le formateur n’a proposé aucun changement";
+
+            var formattedText = ApplyLspTextEdits(document.Text, edits);
+            if (formattedText == document.Text) return "Fichier enregistré · aucun changement de formatage";
+
+            await server.ChangeDocumentAsync(uri, formattedText);
+            document.Text = formattedText;
+            if (_webReady)
+                await PostEditorMessageAsync(new { type = "applyTextEdits", edits, suppressChanges = true });
+            return "Fichier enregistré après formatage LSP";
+        }
+        catch (OperationCanceledException)
+        {
+            OutputPanel.AppendText("[LSP] Formatage annulé; le contenu original est conservé et sera enregistré.\r\n");
+            return "Fichier enregistré sans formatage (annulé)";
+        }
+        catch (Exception ex)
+        {
+            OutputPanel.AppendText("[LSP] Formatage avant sauvegarde ignoré; le contenu original est conservé : " + ex.Message + Environment.NewLine);
+            return "Fichier enregistré sans formatage (erreur LSP)";
+        }
+    }
+
+    private static string ApplyLspTextEdits(string source, JsonElement edits)
+    {
+        var parsed = new List<(int Start, int End, string Text)>();
+        foreach (var edit in edits.EnumerateArray())
+        {
+            if (!edit.TryGetProperty("range", out var range) ||
+                !TryGetLspOffset(source, range, "start", out var start) ||
+                !TryGetLspOffset(source, range, "end", out var end) || start > end ||
+                !edit.TryGetProperty("newText", out var newText) || newText.ValueKind != JsonValueKind.String)
+                throw new InvalidDataException("Le serveur LSP a renvoyé une édition de formatage invalide.");
+            parsed.Add((start, end, newText.GetString() ?? string.Empty));
+        }
+
+        var ascending = parsed.OrderBy(edit => edit.Start).ThenBy(edit => edit.End).ToArray();
+        for (var index = 1; index < ascending.Length; index++)
+            if (ascending[index].Start < ascending[index - 1].End)
+                throw new InvalidDataException("Le serveur LSP a renvoyé des éditions de formatage qui se chevauchent.");
+
+        var result = new StringBuilder(source);
+        foreach (var edit in ascending.OrderByDescending(edit => edit.Start))
+        {
+            result.Remove(edit.Start, edit.End - edit.Start);
+            result.Insert(edit.Start, edit.Text);
+        }
+        return result.ToString();
+    }
+
+    private static bool TryGetLspOffset(string text, JsonElement range, string point, out int offset)
+    {
+        offset = 0;
+        if (!range.TryGetProperty(point, out var position) ||
+            !position.TryGetProperty("line", out var lineJson) || !lineJson.TryGetInt32(out var line) || line < 0 ||
+            !position.TryGetProperty("character", out var characterJson) || !characterJson.TryGetInt32(out var character) || character < 0)
+            return false;
+
+        var currentLine = 0;
+        while (currentLine < line)
+        {
+            var newline = text.IndexOf('\n', offset);
+            if (newline < 0) return false;
+            offset = newline + 1;
+            currentLine++;
+        }
+        var lineEnd = text.IndexOf('\n', offset);
+        if (lineEnd < 0) lineEnd = text.Length;
+        var lineLength = lineEnd - offset;
+        if (character > lineLength) return false;
+        offset += character;
+        return true;
     }
 
     private static Task<List<string>> CollectWorkspaceFilesAsync(string root) => Task.Run(() =>

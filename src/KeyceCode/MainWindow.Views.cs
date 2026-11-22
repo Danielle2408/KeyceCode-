@@ -155,6 +155,7 @@ public partial class MainWindow
         if (settings.ShowDialog() != true) return;
         _editorPreferences = settings.Preferences;
         _preferencesService.Save(_editorPreferences);
+        FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
         try
         {
             if (settings.ClearGeminiApiKey) credentialStore.Delete();
@@ -168,6 +169,15 @@ public partial class MainWindow
         if (settings.SelectedThemeId is not null && settings.SelectedThemeId != themeService.CurrentThemeId)
             themeService.SetTheme(Application.Current, settings.SelectedThemeId);
         await SendEditorOptionsAsync();
+    }
+
+    private void FormatOnSaveMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        _editorPreferences = _editorPreferences with { FormatOnSave = FormatOnSaveMenuItem.IsChecked };
+        _preferencesService.Save(_editorPreferences);
+        StatusMessage.Text = _editorPreferences.FormatOnSave
+            ? "Formatage à l’enregistrement activé · nécessite un serveur LSP compatible"
+            : "Formatage à l’enregistrement désactivé";
     }
 
     private void Encoding_Click(object sender, RoutedEventArgs e)
@@ -330,6 +340,7 @@ internal sealed class SettingsWindow : Window
     private readonly CheckBox _minimap = new();
     private readonly CheckBox _ligatures = new();
     private readonly CheckBox _autoSave = new();
+    private readonly CheckBox _formatOnSave = new();
     private readonly ComboBox _theme = new();
     private readonly TextBox _search = new();
     private readonly PasswordBox _geminiKey = new();
@@ -376,6 +387,7 @@ internal sealed class SettingsWindow : Window
         _minimap.Content = "Afficher la minimap"; _minimap.IsChecked = initial.Minimap; content.Children.Add(Row("Minimap", _minimap));
         _ligatures.Content = "Activer les ligatures"; _ligatures.IsChecked = initial.FontLigatures; content.Children.Add(Row("Ligatures", _ligatures));
         _autoSave.Content = "Sauvegarder automatiquement après 1 seconde"; _autoSave.IsChecked = initial.AutoSave; content.Children.Add(Row("Sauvegarde", _autoSave));
+        _formatOnSave.Content = "Formater avec le serveur LSP avant chaque sauvegarde"; _formatOnSave.IsChecked = initial.FormatOnSave; content.Children.Add(Row("Formatage", _formatOnSave));
         content.Children.Add(new TextBlock { Text = "KeyceIA", FontSize = 16, Margin = new Thickness(0, 18, 0, 8) });
         var keyHelp = new TextBlock { Text = hasGeminiKey
             ? "Une clé Gemini est enregistrée de manière chiffrée pour votre compte Windows. Saisissez une nouvelle clé pour la remplacer."
@@ -419,7 +431,8 @@ internal sealed class SettingsWindow : Window
             WordWrap = _wordWrap.IsChecked == true,
             Minimap = _minimap.IsChecked == true,
             FontLigatures = _ligatures.IsChecked == true,
-            AutoSave = _autoSave.IsChecked == true
+            AutoSave = _autoSave.IsChecked == true,
+            FormatOnSave = _formatOnSave.IsChecked == true
         };
         DialogResult = true;
     }

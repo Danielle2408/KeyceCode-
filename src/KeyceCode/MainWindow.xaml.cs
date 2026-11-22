@@ -41,6 +41,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         InitializeExtensionList();
         _editorPreferences = _preferencesService.Load();
+        FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
         _autoSaveTimer.Tick += AutoSaveTimer_Tick;
         TerminalSessions.Items.Add("PowerShell");
         TerminalSessions.SelectedIndex = 0;
