@@ -25,7 +25,7 @@ public sealed class GeminiService : IDisposable
     {
         _explicitApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
         var configuredModel = string.IsNullOrWhiteSpace(model) ? Environment.GetEnvironmentVariable("GEMINI_MODEL") : model;
-        _model = string.IsNullOrWhiteSpace(configuredModel) ? "gemini-3.8-flash" : configuredModel.Trim();
+        _model = string.IsNullOrWhiteSpace(configuredModel) ? "gemini-3.5-flash-lite" : configuredModel.Trim();
         _http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(75) };
         _ownsClient = httpClient is null;
     }
@@ -121,7 +121,8 @@ public sealed class GeminiService : IDisposable
                 System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden => "La clé Gemini est invalide ou n’a pas accès à l’API.",
                 System.Net.HttpStatusCode.NotFound => "Le modèle Gemini demandé est introuvable ou indisponible pour cette clé.",
                 System.Net.HttpStatusCode.TooManyRequests => "Quota ou limite de requêtes Gemini atteint. Réessayez plus tard ou vérifiez les quotas du projet.",
-                System.Net.HttpStatusCode.ServiceUnavailable or System.Net.HttpStatusCode.BadGateway or System.Net.HttpStatusCode.GatewayTimeout => "Le service Gemini est temporairement saturé ou indisponible après plusieurs essais. Réessayez dans un instant.",
+                System.Net.HttpStatusCode.ServiceUnavailable or System.Net.HttpStatusCode.BadGateway or System.Net.HttpStatusCode.GatewayTimeout =>
+                    $"Le service ou le modèle Gemini est temporairement saturé/indisponible après plusieurs essais. Détail Google : {detail}",
                 _ => detail
             };
             throw new HttpRequestException(

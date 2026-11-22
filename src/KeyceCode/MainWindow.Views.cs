@@ -569,7 +569,7 @@ internal sealed class SettingsWindow : Window
         content.Children.Add(lspHelp);
         content.Children.Add(new TextBlock { Text = "KeyceIA", FontSize = 16, Margin = new Thickness(0, 18, 0, 8) });
         _geminiModel.Text = initial.GeminiModel ?? currentGeminiModel;
-        _geminiModel.ToolTip = "Identifiant de modèle Gemini Developer API (ex. gemini-3.8-flash)";
+        _geminiModel.ToolTip = "Identifiant de modèle Gemini Developer API (par défaut : gemini-3.5-flash-lite)";
         content.Children.Add(Row("Modèle Gemini", _geminiModel));
         _geminiInlineCompletion.Content = "Activer les suggestions Gemini inline pendant la frappe";
         _geminiInlineCompletion.IsChecked = initial.GeminiInlineCompletionEnabled;

@@ -57,6 +57,14 @@ public sealed class GeminiServiceTests
         Assert.Throws<ArgumentException>(() => service.Model = " ");
     }
 
+    [Fact]
+    public void DefaultModel_UsesHighThroughputFlashLite()
+    {
+        using var service = new GeminiService("test-only-key", httpClient: new HttpClient(new StubHandler(_ => new HttpResponseMessage())));
+
+        Assert.Equal("gemini-3.5-flash-lite", service.Model);
+    }
+
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
