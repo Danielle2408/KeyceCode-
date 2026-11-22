@@ -27,7 +27,7 @@ dotnet build src/KeyceCode/KeyceCode.csproj --configuration Release
 - Recherche workspace par expression régulière et filtre de fichiers; palette de commandes et accès rapide aux fichiers.
 - Terminal PowerShell/cmd persistant via processus redirigé, profils de base, exécution de fichiers/projets .NET, Python, JavaScript et PowerShell. Ce terminal n’utilise pas encore ConPTY/xterm.js.
 - Git : branche/état, stage/unstage/discard par menu contextuel, commit des fichiers déjà stagés.
-- Galerie Open VSX intégrée : recherche, détails et téléchargement VSIX Windows dans `%LOCALAPPDATA%\KeyceCode\extensions\downloads`. Le paquet est conservé sur disque et n’est ni installé ni exécuté par KeyceCode.
+- Galerie Open VSX intégrée : recherche, détails et téléchargement VSIX Windows dans `%LOCALAPPDATA%\KeyceCode\extensions\downloads`. Depuis la vue Extensions, **Installer un VSIX téléchargé** ouvre un sélecteur local et installe une archive VSIX dans `%USERPROFILE%\.keycecode\extensions`; les extensions présentes sont listées comme inactives.
 - Client Gemini KeyceIA pour chat et insertion de suggestion au curseur.
 - Serveur LSP configurable par variables d’environnement : completion standard, diagnostics vers les marqueurs Monaco et Problems, synchronisation des documents ouverts.
 
@@ -52,7 +52,7 @@ Pour un serveur .NET lancé par `dotnet`, utilisez `$env:KEYCECODE_LSP_EXECUTABL
 
 ## Limites connues, non présentées comme terminées
 
-La galerie permet de rechercher et télécharger des VSIX depuis Open VSX; l’installation, l’activation et la compatibilité d’un extension host KeyceCode ne sont pas encore implémentées. Le serveur LSP doit être installé et configuré séparément par l’utilisateur; aucun langage serveur n’est inclus. Aucun adaptateur DAP n’est intégré; le bouton Déboguer l’indique. Le terminal exécute un shell persistant mais n’a pas de pseudo-terminal complet. Les groupes d’éditeurs multiples, Settings Sync, profils, notebooks et remote development restent à développer.
+L’installation VSIX locale vérifie le manifeste, rejette les chemins absolus, les traversées de répertoire et les liens symboliques, limite l’archive à 20 000 entrées et l’extraction à 512 Mo, puis extrait les fichiers sous `%USERPROFILE%\.keycecode\extensions`. Cette étape n’est pas une analyse antivirus ni une preuve de confiance. Aucune extension n’est chargée ou exécutée : il n’existe pas d’extension host, d’API VS Code, d’activation, de désinstallation, de mise à jour ou de prise en charge garantie des dépendances natives. La galerie permet de rechercher et télécharger des VSIX depuis Open VSX, mais le choix d’un paquet à installer est manuel. Le serveur LSP doit être installé et configuré séparément par l’utilisateur; aucun langage serveur n’est inclus. Aucun adaptateur DAP n’est intégré; le bouton Déboguer l’indique. Le terminal exécute un shell persistant mais n’a pas de pseudo-terminal complet. Les groupes d’éditeurs multiples, Settings Sync, profils, notebooks et remote development restent à développer.
 
 ## Dépôt distant
 

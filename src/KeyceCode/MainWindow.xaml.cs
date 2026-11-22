@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        InitializeExtensionList();
         _editorPreferences = _preferencesService.Load();
         _autoSaveTimer.Tick += AutoSaveTimer_Tick;
         TerminalSessions.Items.Add("PowerShell");

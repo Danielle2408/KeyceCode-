@@ -1,4 +1,5 @@
 using KeyceCode.Services;
+using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -8,6 +9,45 @@ namespace KeyceCode;
 public partial class MainWindow
 {
     private readonly ExtensionGalleryService _extensionGallery = new();
+    private readonly VsixExtensionService _vsixExtensions = new();
+
+    private void InitializeExtensionList() => RefreshInstalledExtensions();
+
+    private void RefreshInstalledExtensions()
+    {
+        InstalledExtensions.Items.Clear();
+        foreach (var extension in _vsixExtensions.GetInstalled())
+            InstalledExtensions.Items.Add($"{extension.Id}  ·  {extension.Version}");
+        InstalledExtensionsStatus.Text = InstalledExtensions.Items.Count == 0
+            ? $"Aucune extension installée · {_vsixExtensions.ExtensionRoot}"
+            : $"{InstalledExtensions.Items.Count} extension(s) · {_vsixExtensions.ExtensionRoot}";
+    }
+
+    private async void InstallVsix_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Installer un VSIX téléchargé depuis Open VSX",
+            Filter = "Paquets VSIX (*.vsix)|*.vsix",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) != true) return;
+        InstallExtensionButton.IsEnabled = false;
+        ExtensionGalleryStatus.Text = "Validation et installation du paquet…";
+        try
+        {
+            var installed = await _vsixExtensions.InstallAsync(dialog.FileName);
+            RefreshInstalledExtensions();
+            ExtensionGalleryStatus.Text = $"{installed.Id}@{installed.Version} installé. Le code de l’extension reste inactif.";
+            StatusMessage.Text = $"Extension installée : {installed.Id}";
+        }
+        catch (Exception ex)
+        {
+            ExtensionGalleryStatus.Text = "Installation VSIX refusée ou impossible : " + ex.Message;
+        }
+        finally { InstallExtensionButton.IsEnabled = true; }
+    }
 
     private async void ExtensionSearch_KeyDown(object sender, KeyEventArgs e)
     {
