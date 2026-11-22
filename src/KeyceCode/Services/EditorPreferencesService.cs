@@ -12,6 +12,12 @@ public sealed record EditorPreferences
     public bool WordWrap { get; init; }
     public bool Minimap { get; init; } = true;
     public bool FontLigatures { get; init; }
+    public string LineNumbers { get; init; } = "on";
+    public string CursorStyle { get; init; } = "line";
+    public int LineHeight { get; init; }
+    public string RenderWhitespace { get; init; } = "selection";
+    public bool SmoothScrolling { get; init; }
+    public bool StickyScroll { get; init; } = true;
     public bool AutoSave { get; init; }
     public bool FormatOnSave { get; init; }
     /// <summary>Gemini is never contacted while typing unless the user opts in.</summary>

@@ -37,6 +37,12 @@ public static class VsCodeConfigurationImporter
                 : GetBool(root, "editor.wordWrap") ?? current.WordWrap,
             Minimap = GetBool(root, "editor.minimap.enabled") ?? current.Minimap,
             FontLigatures = GetBool(root, "editor.fontLigatures") ?? current.FontLigatures,
+            LineNumbers = Select(GetString(root, "editor.lineNumbers"), ["on", "off", "relative", "interval"], current.LineNumbers),
+            CursorStyle = Select(GetString(root, "editor.cursorStyle"), ["line", "line-thin", "block", "block-outline", "underline", "underline-thin"], current.CursorStyle),
+            LineHeight = Clamp(GetInt(root, "editor.lineHeight"), 0, 100, current.LineHeight),
+            RenderWhitespace = Select(GetString(root, "editor.renderWhitespace"), ["none", "boundary", "selection", "trailing", "all"], current.RenderWhitespace),
+            SmoothScrolling = GetBool(root, "editor.smoothScrolling") ?? current.SmoothScrolling,
+            StickyScroll = GetBool(root, "editor.stickyScroll.enabled") ?? current.StickyScroll,
             AutoSave = GetString(root, "files.autoSave") is { } autoSave
                 ? !string.Equals(autoSave, "off", StringComparison.OrdinalIgnoreCase)
                 : current.AutoSave,
@@ -94,4 +100,9 @@ public static class VsCodeConfigurationImporter
 
     private static int Clamp(int? candidate, int minimum, int maximum, int fallback) =>
         candidate is { } number ? Math.Clamp(number, minimum, maximum) : fallback;
+
+    private static string Select(string? candidate, IReadOnlyCollection<string> allowed, string fallback) =>
+        candidate is not null && allowed.Contains(candidate, StringComparer.OrdinalIgnoreCase)
+            ? allowed.First(value => value.Equals(candidate, StringComparison.OrdinalIgnoreCase))
+            : fallback;
 }

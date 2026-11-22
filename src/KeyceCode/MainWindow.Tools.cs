@@ -79,60 +79,12 @@ public partial class MainWindow
     private async void SelectTerminalProfile_Click(object sender, RoutedEventArgs e)
     {
         var profile = QuickPickWindow.Show(this, "Sélectionner le profil du terminal", new[] { "PowerShell 7", "Windows PowerShell", "Invite de commandes" });
-        if (profile is not null)
-        {
-            if (_activeTerminalProfile != profile || _terminalSession is null || _terminalSession.Completion.IsCompleted)
-                await StartTerminalAsync(profile);
-        }
+        if (profile is not null) await CreateTerminalTabAsync(profile);
     }
 
-    private async Task StartTerminalAsync(string profile)
-    {
-        if (!_terminalReady)
-        {
-            try { await _terminalReadySignal.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch (TimeoutException) { StatusMessage.Text = "xterm n’a pas répondu; la sortie sera conservée jusqu’à son initialisation."; }
-        }
-        await StopTerminalSessionAsync();
-        _activeTerminalProfile = profile;
-        TerminalProfileLabel.Text = profile;
-        var isCmd = profile == "Invite de commandes";
-        var windowsPowerShell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
-        var executable = isCmd ? Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe"
-            : profile == "Windows PowerShell" ? windowsPowerShell
-            : FindExecutable("pwsh.exe") ?? windowsPowerShell;
-        IReadOnlyList<string> arguments = isCmd ? ["/D"] : ["-NoLogo", "-NoExit"];
-        var workingDirectory = _workspace?.RootPath ?? Environment.CurrentDirectory;
-        try
-        {
-            var session = await ConPtySession.StartAsync(executable, arguments, workingDirectory, columns: 120, rows: 30);
-            _terminalSession = session;
-            await Dispatcher.InvokeAsync(() => QueueOrWriteTerminal(session,
-                $"\r\n\u001b[90m[{profile} démarré dans {workingDirectory}]\u001b[0m\r\n"));
-            _ = PumpTerminalOutputAsync(session);
-            _ = MonitorTerminalExitAsync(session, profile);
-            StatusMessage.Text = $"Terminal : {profile}";
-        }
-        catch (Exception ex)
-        {
-            var message = "Impossible de démarrer le terminal : " + ex.Message + Environment.NewLine;
-            await Dispatcher.InvokeAsync(() =>
-            {
-                if (_terminalReady) PostTerminalMessage(new { type = "write", data = message });
-                else AppendPendingTerminalOutput(message);
-                StatusMessage.Text = "Échec du démarrage ConPTY";
-            });
-        }
-    }
+    private async Task StartTerminalAsync(string profile) => await CreateTerminalTabAsync(profile);
 
-    private async Task StopTerminalSessionAsync()
-    {
-        var session = _terminalSession;
-        _terminalSession = null;
-        if (session is null) return;
-        try { await session.DisposeAsync(); }
-        catch (Exception ex) { OutputPanel.AppendText("Arrêt ConPTY : " + ex.Message + Environment.NewLine); }
-    }
+    private async Task StopTerminalSessionAsync() => await StopAllTerminalTabsAsync();
 
     private async Task PumpTerminalOutputAsync(ConPtySession session)
     {
@@ -145,7 +97,7 @@ public partial class MainWindow
         {
             await Dispatcher.InvokeAsync(() =>
             {
-                if (ReferenceEquals(session, _terminalSession))
+                if (_terminalTabs.Values.Any(tab => ReferenceEquals(tab.Session, session)))
                     OutputPanel.AppendText("[ConPTY output] " + ex.Message + Environment.NewLine);
             });
         }
@@ -159,7 +111,7 @@ public partial class MainWindow
             await session.Output.Completion;
             await Dispatcher.InvokeAsync(() =>
             {
-                if (ReferenceEquals(session, _terminalSession))
+                if (_terminalTabs.Values.FirstOrDefault(tab => ReferenceEquals(tab.Session, session)) is { } tab)
                     QueueOrWriteTerminal(session, $"\r\n\u001b[90m[{profile} terminé · code {exitCode}]\u001b[0m\r\n");
             });
         }
@@ -167,16 +119,15 @@ public partial class MainWindow
         {
             await Dispatcher.InvokeAsync(() =>
             {
-                if (ReferenceEquals(session, _terminalSession)) OutputPanel.AppendText("[ConPTY] " + ex.Message + Environment.NewLine);
+                if (_terminalTabs.Values.Any(tab => ReferenceEquals(tab.Session, session))) OutputPanel.AppendText("[ConPTY] " + ex.Message + Environment.NewLine);
             });
         }
     }
 
     private void QueueOrWriteTerminal(ConPtySession session, string text)
     {
-        if (!ReferenceEquals(session, _terminalSession)) return;
-        if (_terminalReady) PostTerminalMessage(new { type = "write", data = text });
-        else AppendPendingTerminalOutput(text);
+        var tab = _terminalTabs.Values.FirstOrDefault(candidate => ReferenceEquals(candidate.Session, session));
+        if (tab is not null) WriteTerminalOutput(tab, text);
     }
 
     private void AppendPendingTerminalOutput(string text)

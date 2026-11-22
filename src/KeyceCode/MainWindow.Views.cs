@@ -181,6 +181,17 @@ public partial class MainWindow
             var imported = VsCodeConfigurationImporter.Import(settingsPath, _editorPreferences);
             var snippetDirectory = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(settingsPath))!, "snippets");
             var snippets = _snippetService.ImportFromVsCode(snippetDirectory);
+            var keybindingsPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(settingsPath))!, "keybindings.json");
+            var keybindingCount = 0;
+            var skippedKeybindingCount = 0;
+            if (File.Exists(keybindingsPath))
+            {
+                var keybindings = VsCodeKeybindingImporter.Import(keybindingsPath);
+                VsCodeKeybindingImporter.SaveImported(keybindings);
+                _importedKeybindings = keybindings.Keybindings;
+                keybindingCount = keybindings.Keybindings.Count;
+                skippedKeybindingCount = keybindings.SkippedCount;
+            }
             _editorPreferences = imported.Preferences;
             _preferencesService.Save(_editorPreferences);
             FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
@@ -188,17 +199,53 @@ public partial class MainWindow
                 ((App)Application.Current).ThemeService.SetTheme(Application.Current, themeId);
             await SendEditorOptionsAsync();
             await SendUserSnippetsAsync();
-            StatusMessage.Text = "Préférences et snippets VS Code importés";
+            StatusMessage.Text = "Préférences, snippets et raccourcis VS Code importés";
             MessageBox.Show(this,
                 $"Préférences compatibles importées depuis :\n{imported.SourcePath}\n\n" +
                 $"{snippets.ImportedSnippets} snippet(s) importé(s) depuis {snippetDirectory} ({snippets.SkippedFiles} fichier(s) ignoré(s)).\n" +
-                $"{imported.ExtensionCount} extension(s) VS Code détectée(s) dans le profil local. Vous pouvez copier leurs paquets depuis la vue Extensions; ils resteront inactifs car KeyceCode n’a pas encore d’hôte d’extensions. Les raccourcis clavier personnalisés et thèmes tiers ne sont pas appliqués.",
+                $"{keybindingCount} raccourci(s) pris en charge importé(s) ({skippedKeybindingCount} ignoré(s)); fichier recherché : {keybindingsPath}.\n" +
+                $"{imported.ExtensionCount} extension(s) VS Code détectée(s) dans le profil local. Vous pouvez copier leurs paquets depuis la vue Extensions; ils resteront inactifs car KeyceCode n’a pas encore d’hôte d’extensions. Les thèmes tiers ne sont pas appliqués.",
                 "Import Visual Studio Code", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException)
         {
             MessageBox.Show(this, "Impossible d’importer cette configuration VS Code : " + ex.Message,
                 "Import Visual Studio Code", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ImportVsCodeKeybindings_Click(object sender, RoutedEventArgs e)
+    {
+        var path = VsCodeKeybindingImporter.DefaultKeybindingsPath;
+        if (!File.Exists(path))
+        {
+            var dialog = new OpenFileDialog
+            {
+                Title = "Choisir le keybindings.json de Visual Studio Code",
+                Filter = "Raccourcis VS Code (keybindings.json)|keybindings.json|Fichiers JSON (*.json)|*.json|Tous les fichiers (*.*)|*.*",
+                InitialDirectory = Path.GetDirectoryName(path),
+                FileName = "keybindings.json",
+                CheckFileExists = true
+            };
+            if (dialog.ShowDialog(this) != true) return;
+            path = dialog.FileName;
+        }
+        try
+        {
+            var imported = VsCodeKeybindingImporter.Import(path);
+            VsCodeKeybindingImporter.SaveImported(imported);
+            _importedKeybindings = imported.Keybindings;
+            StatusMessage.Text = $"{imported.Keybindings.Count} raccourci(s) importé(s) · {imported.SkippedCount} ignoré(s)";
+            MessageBox.Show(this,
+                $"{imported.Keybindings.Count} raccourci(s) importé(s) depuis :\n{imported.SourcePath}\n\n" +
+                $"{imported.SkippedCount} entrée(s) ignorée(s), {imported.OverriddenCount} conflit(s) résolu(s) en faveur du raccourci défini en dernier.\n" +
+                "Seules les commandes prises en charge par KeyceCode sont activées.",
+                "Importer les raccourcis VS Code", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException)
+        {
+            MessageBox.Show(this, "Impossible d’importer keybindings.json : " + ex.Message,
+                "Importer les raccourcis VS Code", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -288,6 +335,7 @@ public partial class MainWindow
 
     private async void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (await TryHandleImportedKeybindingAsync(e)) { e.Handled = true; return; }
         if (Keyboard.Modifiers == ModifierKeys.Control)
         {
             switch (e.Key)
@@ -396,6 +444,12 @@ internal sealed class SettingsWindow : Window
     private readonly CheckBox _wordWrap = new();
     private readonly CheckBox _minimap = new();
     private readonly CheckBox _ligatures = new();
+    private readonly ComboBox _lineNumbers = new();
+    private readonly ComboBox _cursorStyle = new();
+    private readonly TextBox _lineHeight = new();
+    private readonly ComboBox _renderWhitespace = new();
+    private readonly CheckBox _smoothScrolling = new();
+    private readonly CheckBox _stickyScroll = new();
     private readonly CheckBox _autoSave = new();
     private readonly CheckBox _formatOnSave = new();
     private readonly CheckBox _geminiInlineCompletion = new();
@@ -444,6 +498,12 @@ internal sealed class SettingsWindow : Window
         _wordWrap.Content = "Activer le retour à la ligne"; _wordWrap.IsChecked = initial.WordWrap; content.Children.Add(Row("Retour à la ligne", _wordWrap));
         _minimap.Content = "Afficher la minimap"; _minimap.IsChecked = initial.Minimap; content.Children.Add(Row("Minimap", _minimap));
         _ligatures.Content = "Activer les ligatures"; _ligatures.IsChecked = initial.FontLigatures; content.Children.Add(Row("Ligatures", _ligatures));
+        ConfigureOptions(_lineNumbers, ["on", "relative", "interval", "off"], initial.LineNumbers); content.Children.Add(Row("Numéros de ligne", _lineNumbers));
+        ConfigureOptions(_cursorStyle, ["line", "line-thin", "block", "block-outline", "underline", "underline-thin"], initial.CursorStyle); content.Children.Add(Row("Style du curseur", _cursorStyle));
+        _lineHeight.Text = initial.LineHeight.ToString(); content.Children.Add(Row("Hauteur de ligne (0 = auto)", _lineHeight));
+        ConfigureOptions(_renderWhitespace, ["none", "boundary", "selection", "trailing", "all"], initial.RenderWhitespace); content.Children.Add(Row("Espaces blancs", _renderWhitespace));
+        _smoothScrolling.Content = "Défilement fluide"; _smoothScrolling.IsChecked = initial.SmoothScrolling; content.Children.Add(Row("Défilement", _smoothScrolling));
+        _stickyScroll.Content = "Afficher les en-têtes de portée"; _stickyScroll.IsChecked = initial.StickyScroll; content.Children.Add(Row("Sticky scroll", _stickyScroll));
         _autoSave.Content = "Sauvegarder automatiquement après 1 seconde"; _autoSave.IsChecked = initial.AutoSave; content.Children.Add(Row("Sauvegarde", _autoSave));
         _formatOnSave.Content = "Formater avec le serveur LSP avant chaque sauvegarde"; _formatOnSave.IsChecked = initial.FormatOnSave; content.Children.Add(Row("Formatage", _formatOnSave));
         content.Children.Add(new TextBlock { Text = "KeyceIA", FontSize = 16, Margin = new Thickness(0, 18, 0, 8) });
@@ -490,6 +550,11 @@ internal sealed class SettingsWindow : Window
             MessageBox.Show(this, "L’indentation doit être entre 1 et 16.", "Paramètres", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        if (!int.TryParse(_lineHeight.Text, out var lineHeight) || lineHeight is < 0 or > 100)
+        {
+            MessageBox.Show(this, "La hauteur de ligne doit être comprise entre 0 et 100 (0 sélectionne la valeur automatique).", "Paramètres", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         Preferences = new EditorPreferences
         {
             FontFamily = string.IsNullOrWhiteSpace(_fontFamily.Text) ? "Cascadia Code, Consolas, monospace" : _fontFamily.Text.Trim(),
@@ -499,11 +564,25 @@ internal sealed class SettingsWindow : Window
             WordWrap = _wordWrap.IsChecked == true,
             Minimap = _minimap.IsChecked == true,
             FontLigatures = _ligatures.IsChecked == true,
+            LineNumbers = _lineNumbers.SelectedItem as string ?? "on",
+            CursorStyle = _cursorStyle.SelectedItem as string ?? "line",
+            LineHeight = lineHeight,
+            RenderWhitespace = _renderWhitespace.SelectedItem as string ?? "selection",
+            SmoothScrolling = _smoothScrolling.IsChecked == true,
+            StickyScroll = _stickyScroll.IsChecked == true,
             AutoSave = _autoSave.IsChecked == true,
             FormatOnSave = _formatOnSave.IsChecked == true,
             GeminiInlineCompletionEnabled = _geminiInlineCompletion.IsChecked == true
         };
         DialogResult = true;
+    }
+
+    private static void ConfigureOptions(ComboBox box, string[] options, string selected)
+    {
+        box.ItemsSource = options;
+        box.SelectedItem = options.Contains(selected, StringComparer.OrdinalIgnoreCase)
+            ? options.First(option => option.Equals(selected, StringComparison.OrdinalIgnoreCase))
+            : options[0];
     }
 
     private static FrameworkElement Row(string label, Control control)

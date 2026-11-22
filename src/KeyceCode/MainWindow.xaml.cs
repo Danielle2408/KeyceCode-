@@ -516,34 +516,15 @@ public partial class MainWindow : Window
             var type = ReadString(root, "type");
             if (type == "ready")
             {
-                _terminalReady = true;
-                _terminalReadySignal.TrySetResult(true);
-                var theme = ((App)Application.Current).ThemeService.CurrentTheme;
-                PostTerminalMessage(new { type = "setTheme", theme = TerminalTheme(theme.Id) });
-                if (_terminalPendingOutput.Length > 0)
-                {
-                    PostTerminalMessage(new { type = "write", data = _terminalPendingOutput.ToString() });
-                    _terminalPendingOutput.Clear();
-                }
-                if (_terminalSession is not null && TryReadDimensions(root, out var cols, out var rows))
-                {
-                    try { _terminalSession.Resize(cols, rows); }
-                    catch (InvalidOperationException) { }
-                }
+                OnTerminalWebViewReady(root);
             }
             else if (type == "input")
             {
-                var data = ReadString(root, "data");
-                if (data is not null && _terminalSession is not null) await _terminalSession.SendInputAsync(data);
+                await HandleTerminalInputAsync(root);
             }
             else if (type == "resize")
             {
-                if (_terminalSession is not null && TryReadDimensions(root, out var cols, out var rows))
-                {
-                    try { _terminalSession.Resize(cols, rows); }
-                    catch (InvalidOperationException) { }
-                    catch (System.Runtime.InteropServices.COMException ex) { StatusMessage.Text = "Redimensionnement ConPTY impossible : " + ex.Message; }
-                }
+                HandleTerminalResize(root);
             }
             else if (type == "closed")
             {
@@ -930,7 +911,13 @@ public partial class MainWindow : Window
                 insertSpaces = _editorPreferences.InsertSpaces,
                 wordWrap = _editorPreferences.WordWrap ? "on" : "off",
                 minimap = new { enabled = _editorPreferences.Minimap },
-                fontLigatures = _editorPreferences.FontLigatures
+                fontLigatures = _editorPreferences.FontLigatures,
+                lineNumbers = _editorPreferences.LineNumbers,
+                cursorStyle = _editorPreferences.CursorStyle,
+                lineHeight = _editorPreferences.LineHeight,
+                renderWhitespace = _editorPreferences.RenderWhitespace,
+                smoothScrolling = _editorPreferences.SmoothScrolling,
+                stickyScroll = new { enabled = _editorPreferences.StickyScroll }
             }
         });
         await PostEditorMessageAsync(new { type = "setAiCompletionEnabled", value = _editorPreferences.GeminiInlineCompletionEnabled });

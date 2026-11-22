@@ -2,7 +2,7 @@
   "use strict";
 
   const host = window.chrome?.webview;
-  const terminalRoot = document.getElementById("terminal");
+  const terminalRoot = document.getElementById("terminals");
   const themeDark = {
     background: "#181818", foreground: "#cccccc", cursor: "#aeafad", cursorAccent: "#181818",
     selectionBackground: "#264f78", black: "#000000", red: "#cd3131", green: "#0dbc79", yellow: "#e5e510",
@@ -17,9 +17,10 @@
     brightRed: "#cd3131", brightGreen: "#14ce14", brightYellow: "#b5ba00", brightBlue: "#0451a5",
     brightMagenta: "#bc05bc", brightCyan: "#0598bc", brightWhite: "#a5a5a5"
   };
-  let terminal;
-  let fitAddon;
-  let resizeTimer;
+  const sessions = new Map();
+  let activeId = null;
+  let currentTheme = "dark";
+  let currentOptions = {};
   let disposed = false;
 
   function post(message) {
@@ -27,133 +28,136 @@
     else window.parent.postMessage({ source: "keycecode-terminal", ...message }, "*");
   }
 
-  function fitAndReport() {
-    if (!terminal || !fitAddon || disposed) return;
-    window.clearTimeout(resizeTimer);
-    resizeTimer = window.setTimeout(() => {
-      if (disposed) return;
+  function fitAndReport(session) {
+    if (!session || disposed || session.id !== activeId) return;
+    window.clearTimeout(session.resizeTimer);
+    session.resizeTimer = window.setTimeout(() => {
+      if (disposed || session.id !== activeId) return;
       try {
-        fitAddon.fit();
-        post({ type: "resize", cols: terminal.cols, rows: terminal.rows });
-      } catch (error) {
-        post({ type: "terminalError", message: String(error?.message || error) });
-      }
+        session.fitAddon.fit();
+        post({ type: "resize", id: session.id, cols: session.terminal.cols, rows: session.terminal.rows });
+      } catch (error) { post({ type: "terminalError", id: session.id, message: String(error?.message || error) }); }
     }, 40);
   }
 
   function setTheme(name) {
-    const light = name === "light" || name === "vs" || name === "hc-light";
+    currentTheme = String(name || "dark");
+    const light = currentTheme === "light" || currentTheme === "vs" || currentTheme === "hc-light";
     const theme = light ? themeLight : themeDark;
-    terminal?.options && (terminal.options.theme = theme);
+    for (const session of sessions.values()) session.terminal.options.theme = theme;
     document.documentElement.style.colorScheme = light ? "light" : "dark";
     document.documentElement.style.setProperty("--terminal-bg", theme.background);
     document.documentElement.style.setProperty("--terminal-fg", theme.foreground);
     document.documentElement.style.setProperty("--terminal-cursor", theme.cursor);
   }
 
-  function dispatch(message) {
-    if (!message || typeof message !== "object" || !terminal) return;
-    switch (message.type) {
-      case "write":
-        terminal.write(String(message.data ?? ""));
-        break;
-      case "clear":
-        terminal.clear();
-        break;
-      case "resize":
-        if (Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols > 0 && message.rows > 0) {
-          terminal.resize(message.cols, message.rows);
-          fitAndReport();
-        }
-        break;
-      case "fit":
-        fitAndReport();
-        break;
-      case "setTheme":
-        setTheme(String(message.theme || "dark"));
-        break;
-      case "setOptions": {
-        const options = message.options || {};
-        if (Number.isFinite(options.fontSize)) {
-          const size = Math.max(8, Math.min(40, options.fontSize));
-          terminal.options.fontSize = size;
-          document.documentElement.style.setProperty("--terminal-font-size", `${size}px`);
-        }
-        if (typeof options.fontFamily === "string" && options.fontFamily.length < 256) {
-          terminal.options.fontFamily = options.fontFamily;
-          document.documentElement.style.setProperty("--terminal-font", `${options.fontFamily}, Consolas, monospace`);
-        }
-        if (Number.isFinite(options.scrollback)) terminal.options.scrollback = Math.max(0, Math.min(100000, options.scrollback));
-        if (options.theme) setTheme(options.theme);
-        fitAndReport();
-        break;
-      }
-      case "focus":
-        terminal.focus();
-        break;
-      case "dispose":
-        if (!disposed) {
-          disposed = true;
-          terminal.dispose();
-          post({ type: "closed" });
-        }
-        break;
-      default:
-        post({ type: "terminalError", message: `Message hôte inconnu : ${String(message.type)}` });
+  function createSession(id, profile) {
+    id = String(id || "");
+    if (!id || id.length > 128) return null;
+    if (sessions.has(id)) return sessions.get(id);
+    const view = document.createElement("section");
+    view.className = "terminal-view";
+    view.setAttribute("aria-label", `Terminal ${String(profile || "")}`);
+    terminalRoot.appendChild(view);
+    const terminal = new Terminal({
+      allowProposedApi: false, allowTransparency: false, convertEol: false, cursorBlink: true,
+      cursorStyle: "bar", cursorWidth: 2, fontFamily: '"Cascadia Code", Consolas, monospace',
+      fontSize: 13, lineHeight: 1.15, scrollback: 5000, smoothScrollDuration: 0,
+      theme: currentTheme === "light" || currentTheme === "vs" || currentTheme === "hc-light" ? themeLight : themeDark,
+      windowsMode: true, rightClickSelectsWord: true, overviewRulerWidth: 10, ...currentOptions
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(view);
+    const session = { id, profile: String(profile || ""), terminal, fitAddon, view, resizeTimer: 0, observer: null };
+    terminal.onData((data) => post({ type: "input", id, data }));
+    terminal.onResize(({ cols, rows }) => post({ type: "resize", id, cols, rows }));
+    session.observer = new ResizeObserver(() => fitAndReport(session));
+    session.observer.observe(view);
+    sessions.set(id, session);
+    if (activeId === null) switchSession(id);
+    return session;
+  }
+
+  function switchSession(id) {
+    const session = sessions.get(String(id));
+    if (!session) return;
+    activeId = session.id;
+    for (const item of sessions.values()) item.view.classList.toggle("active", item === session);
+    requestAnimationFrame(() => {
+      fitAndReport(session);
+      session.terminal.focus();
+    });
+  }
+
+  function removeSession(id) {
+    const session = sessions.get(String(id));
+    if (!session) return;
+    window.clearTimeout(session.resizeTimer);
+    session.observer.disconnect();
+    session.terminal.dispose();
+    session.view.remove();
+    sessions.delete(session.id);
+    if (activeId === session.id) {
+      activeId = null;
+      const next = sessions.keys().next().value;
+      if (next) switchSession(next);
     }
   }
 
+  function dispatch(message) {
+    if (!message || typeof message !== "object") return;
+    const id = String(message.id || activeId || "");
+    switch (message.type) {
+      case "createSession": createSession(id, message.profile); break;
+      case "switchSession": switchSession(id); break;
+      case "removeSession": removeSession(id); break;
+      case "write": sessions.get(id)?.terminal.write(String(message.data ?? "")); break;
+      case "clear": sessions.get(id)?.terminal.clear(); break;
+      case "resize": {
+        const session = sessions.get(id);
+        if (session && Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols > 0 && message.rows > 0) {
+          session.terminal.resize(message.cols, message.rows);
+          fitAndReport(session);
+        }
+        break;
+      }
+      case "fit": fitAndReport(sessions.get(id)); break;
+      case "setTheme": setTheme(message.theme); break;
+      case "setOptions": {
+        const options = message.options || {};
+        currentOptions = {};
+        if (Number.isFinite(options.fontSize)) currentOptions.fontSize = Math.max(8, Math.min(40, options.fontSize));
+        if (typeof options.fontFamily === "string" && options.fontFamily.length < 256) currentOptions.fontFamily = options.fontFamily;
+        if (Number.isFinite(options.scrollback)) currentOptions.scrollback = Math.max(0, Math.min(100000, options.scrollback));
+        for (const session of sessions.values()) {
+          if (currentOptions.fontSize) session.terminal.options.fontSize = currentOptions.fontSize;
+          if (currentOptions.fontFamily) session.terminal.options.fontFamily = currentOptions.fontFamily;
+          if (currentOptions.scrollback !== undefined) session.terminal.options.scrollback = currentOptions.scrollback;
+        }
+        fitAndReport(sessions.get(activeId));
+        break;
+      }
+      case "focus": sessions.get(activeId)?.terminal.focus(); break;
+      case "dispose": dispose(); break;
+      default: post({ type: "terminalError", message: `Message hôte inconnu : ${String(message.type)}` });
+    }
+  }
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    for (const id of [...sessions.keys()]) removeSession(id);
+    post({ type: "closed" });
+  }
+
   try {
-    terminal = new Terminal({
-      allowProposedApi: false,
-      allowTransparency: false,
-      convertEol: false,
-      cursorBlink: true,
-      cursorStyle: "bar",
-      cursorWidth: 2,
-      fontFamily: '"Cascadia Code", Consolas, monospace',
-      fontSize: 13,
-      lineHeight: 1.15,
-      scrollback: 5000,
-      smoothScrollDuration: 0,
-      theme: themeDark,
-      windowsMode: true,
-      rightClickSelectsWord: true,
-      overviewRulerWidth: 10
-    });
-    fitAddon = new FitAddon.FitAddon();
-    terminal.loadAddon(fitAddon);
-    terminal.open(terminalRoot);
-    terminal.onData((data) => post({ type: "input", data }));
-    terminal.onResize(({ cols, rows }) => post({ type: "resize", cols, rows }));
-
-    window.keyceTerminal = {
-      dispatch,
-      fit: fitAndReport,
-      focus: () => terminal.focus(),
-      get dimensions() { return { cols: terminal.cols, rows: terminal.rows }; }
-    };
-
+    window.keyceTerminal = { dispatch, focus: () => sessions.get(activeId)?.terminal.focus(), get sessionCount() { return sessions.size; } };
     if (host) host.addEventListener("message", (event) => dispatch(event.data));
     else window.addEventListener("message", (event) => {
       if (event.data?.target === "keycecode-terminal") dispatch(event.data.message);
     });
-
-    const observer = new ResizeObserver(fitAndReport);
-    observer.observe(terminalRoot);
-    window.addEventListener("pagehide", () => {
-      if (disposed) return;
-      disposed = true;
-      observer.disconnect();
-      window.clearTimeout(resizeTimer);
-      post({ type: "closed" });
-      terminal.dispose();
-    }, { once: true });
-
-    fitAndReport();
-    post({ type: "ready", cols: terminal.cols, rows: terminal.rows, capabilities: ["vt", "selection", "clipboard", "fit", "resize"] });
-    terminal.focus();
-  } catch (error) {
-    post({ type: "terminalError", message: String(error?.stack || error?.message || error) });
-  }
+    window.addEventListener("pagehide", dispose, { once: true });
+    post({ type: "ready", capabilities: ["vt", "selection", "clipboard", "fit", "resize", "sessions"] });
+  } catch (error) { post({ type: "terminalError", message: String(error?.stack || error?.message || error) }); }
 })();
