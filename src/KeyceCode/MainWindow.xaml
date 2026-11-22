@@ -50,7 +50,7 @@
       <!-- Primary view container -->
       <Grid Grid.Column="1" Grid.Row="0" Grid.RowSpan="3" Background="{DynamicResource SidebarBackground}">
         <Grid.RowDefinitions><RowDefinition Height="35"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-        <DockPanel Grid.Row="0" Margin="14,0,8,0"><TextBlock x:Name="SidebarHeading" Text="EXPLORATEUR" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/><StackPanel Orientation="Horizontal" DockPanel.Dock="Right"><Button Content="…" Padding="4,2" ToolTip="Autres actions"/></StackPanel></DockPanel>
+        <DockPanel Grid.Row="0" Margin="14,0,8,0"><TextBlock x:Name="SidebarHeading" Text="EXPLORATEUR" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/><StackPanel Orientation="Horizontal" DockPanel.Dock="Right"><Button Content="…" Padding="4,2" Click="ExplorerMore_Click" ToolTip="Autres actions de l’Explorateur"/></StackPanel></DockPanel>
         <Grid Grid.Row="1">
           <Grid x:Name="ExplorerView"><DockPanel>
             <StackPanel DockPanel.Dock="Top"><TextBlock x:Name="WorkspaceFolderLabel" Text="OUVRIR UN DOSSIER POUR COMMENCER" Foreground="{DynamicResource MutedBrush}" FontSize="10" Margin="15,8,8,8"/><DockPanel Margin="8,0,8,7"><Button Content="📁" Click="OpenFolder_Click" ToolTip="Ouvrir un dossier"/><Button Content="＋ Fichier" Click="ExplorerNewFile_Click" HorizontalAlignment="Stretch"/><Button Content="＋ Dossier" Click="ExplorerNewFolder_Click" HorizontalAlignment="Stretch"/><Button Content="⟳" Click="ExplorerRefresh_Click" ToolTip="Actualiser l’Explorateur"/></DockPanel></StackPanel>

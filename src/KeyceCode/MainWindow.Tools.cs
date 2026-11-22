@@ -473,8 +473,8 @@ public partial class MainWindow
             try { await action(); }
             catch (Exception ex)
             {
-                OutputPanel.AppendText("[Git] " + ex.Message + Environment.NewLine);
-                StatusMessage.Text = "Action Git impossible · consultez Sortie";
+                OutputPanel.AppendText("[Action] " + ex.Message + Environment.NewLine);
+                StatusMessage.Text = "Action impossible · consultez Sortie";
             }
         };
         return item;

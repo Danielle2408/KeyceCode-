@@ -117,6 +117,31 @@ public partial class MainWindow
         catch (Exception ex) { ShowError(ex); }
     }
 
+    private void ExplorerMore_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = (ExplorerTree.SelectedItem as TreeViewItem)?.Tag as WorkspaceEntry;
+        var menu = new ContextMenu();
+        menu.Items.Add(MenuAction("Nouveau fichier…", () => CreateWorkspaceEntryAsync(selected, directory: false)));
+        menu.Items.Add(MenuAction("Nouveau dossier…", () => CreateWorkspaceEntryAsync(selected, directory: true)));
+        menu.Items.Add(MenuAction("Actualiser l’Explorateur", async () => await RefreshExplorerAsync()));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MenuAction("Réduire tous les dossiers", () =>
+        {
+            foreach (var node in ExplorerTree.Items.Cast<TreeViewItem>().SelectMany(FlattenTreeItems)) node.IsExpanded = false;
+            return Task.CompletedTask;
+        }));
+        var copyPath = MenuAction("Copier le chemin sélectionné", () =>
+        {
+            if (selected is not null) Clipboard.SetText(selected.FullPath);
+            return Task.CompletedTask;
+        });
+        copyPath.IsEnabled = selected is not null;
+        menu.Items.Add(copyPath);
+        menu.PlacementTarget = sender as UIElement;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
     private async Task RenameWorkspaceEntryAsync(WorkspaceEntry entry)
     {
         if (_workspace is null) return;
