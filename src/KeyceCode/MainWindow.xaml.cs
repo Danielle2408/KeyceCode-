@@ -477,6 +477,7 @@ public partial class MainWindow : Window
                 CodeEditor.NavigateToString("<html><body style='background:#1e1e1e;color:#ddd;font:14px Segoe UI;padding:28px'><h2>Monaco n’est pas encore généré</h2><p>Exécutez npm ci puis npm run build dans WebEditor.</p></body></html>");
             }
             await InitializeTerminalWebViewAsync(editorRoot);
+            RestoreWorkbenchLayout();
             await RestoreSessionAsync();
             await StartTerminalAsync(_activeTerminalProfile ?? "PowerShell 7");
         }
@@ -636,6 +637,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            _layoutService.Save(CaptureWorkbenchLayout());
             _sessionService.Save(new WorkspaceSession(
                 _workspace?.RootPath,
                 _documents.Where(document => !string.IsNullOrWhiteSpace(document.Path) && File.Exists(document.Path))
