@@ -271,7 +271,28 @@ public partial class MainWindow
         var isCmd = _activeTerminalProfile == "Invite de commandes";
         string QuotePath(string value) => isCmd ? QuoteCmd(value) : Quote(value);
         if (extension == ".csproj") command = $"dotnet run --project {QuotePath(path)}";
-        else if (extension == ".sln" || extension == ".slnx") command = $"dotnet build {QuotePath(path)}";
+        else if (extension is ".sln" or ".slnx")
+        {
+            IReadOnlyList<string> projects;
+            try { projects = DotNetSolutionService.GetProjects(path); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            {
+                StatusMessage.Text = "Impossible de lire la solution : " + ex.Message;
+                return;
+            }
+            if (projects.Count == 0)
+            {
+                StatusMessage.Text = "Cette solution ne contient aucun projet C# utilisable.";
+                return;
+            }
+            var projectLabels = projects.ToDictionary(project => Path.GetRelativePath(directory, project), project => project, StringComparer.OrdinalIgnoreCase);
+            var selectedLabel = projects.Count == 1 ? null : QuickPickWindow.Show(this, "Choisir le projet de démarrage", projectLabels.Keys);
+            var selectedProject = projects.Count == 1 ? projects[0] :
+                selectedLabel is not null && projectLabels.TryGetValue(selectedLabel, out var choice) ? choice : null;
+            if (selectedProject is null) return;
+            command = $"dotnet run --project {QuotePath(selectedProject)}";
+            directory = Path.GetDirectoryName(selectedProject)!;
+        }
         else if (extension == ".py") command = $"python {QuotePath(path)}";
         else if (extension is ".js" or ".mjs") command = $"node {QuotePath(path)}";
         else if (extension == ".ps1") command = isCmd ? $"powershell.exe -ExecutionPolicy Bypass -File {QuoteCmd(path)}" : $"& {Quote(path)}";

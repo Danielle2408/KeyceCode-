@@ -19,16 +19,27 @@ public sealed class GeminiService : IDisposable
     private readonly bool _ownsClient;
     private readonly string? _explicitApiKey;
     private readonly GeminiCredentialStore _credentialStore = new();
-    private readonly string _model;
+    private string _model;
 
     public GeminiService(string? apiKey = null, string? model = null, HttpClient? httpClient = null)
     {
         _explicitApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
-        _model = string.IsNullOrWhiteSpace(model)
-            ? Environment.GetEnvironmentVariable("GEMINI_MODEL") ?? "gemini-3.8-flash"
-            : model.Trim();
+        var configuredModel = string.IsNullOrWhiteSpace(model) ? Environment.GetEnvironmentVariable("GEMINI_MODEL") : model;
+        _model = string.IsNullOrWhiteSpace(configuredModel) ? "gemini-3.8-flash" : configuredModel.Trim();
         _http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(75) };
         _ownsClient = httpClient is null;
+    }
+
+    /// <summary>Gemini Developer API model ID, without the "models/" prefix.</summary>
+    public string Model
+    {
+        get => _model;
+        set
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                throw new ArgumentException("L’identifiant du modèle Gemini ne peut pas être vide.", nameof(value));
+            _model = value.Trim();
+        }
     }
 
     public Task<string> AskAsync(string prompt, CancellationToken cancellationToken = default)

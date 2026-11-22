@@ -16,12 +16,18 @@ public sealed record EditorPreferences
     public string CursorStyle { get; init; } = "line";
     public int LineHeight { get; init; }
     public string RenderWhitespace { get; init; } = "selection";
+    public string RenderLineHighlight { get; init; } = "all";
+    public bool IndentationGuides { get; init; } = true;
+    public bool BracketPairGuides { get; init; } = true;
+    public bool BracketPairColorization { get; init; } = true;
     public bool SmoothScrolling { get; init; }
     public bool StickyScroll { get; init; } = true;
     public bool AutoSave { get; init; }
     public bool FormatOnSave { get; init; }
     /// <summary>Gemini is never contacted while typing unless the user opts in.</summary>
     public bool GeminiInlineCompletionEnabled { get; init; }
+    /// <summary>Optional Gemini Developer API model identifier; null follows GEMINI_MODEL/default.</summary>
+    public string? GeminiModel { get; init; }
 }
 
 /// <summary>Persists non-secret editor preferences in the current user's AppData directory.</summary>

@@ -8,6 +8,7 @@ public sealed record VsCodeImportResult(EditorPreferences Preferences, string? T
 /// <summary>Imports the editor settings KeyceCode currently supports from a VS Code settings.json.</summary>
 public static class VsCodeConfigurationImporter
 {
+    public const int MaximumSettingsBytes = 2 * 1024 * 1024;
     public static string DefaultSettingsPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Code", "User", "settings.json");
 
@@ -16,6 +17,9 @@ public static class VsCodeConfigurationImporter
         ArgumentException.ThrowIfNullOrWhiteSpace(settingsPath);
         ArgumentNullException.ThrowIfNull(current);
         var fullPath = Path.GetFullPath(settingsPath);
+        var info = new FileInfo(fullPath);
+        if (!info.Exists) throw new FileNotFoundException("Fichier settings.json introuvable.", fullPath);
+        if (info.Length > MaximumSettingsBytes) throw new InvalidDataException("settings.json dépasse la limite de 2 Mio.");
         using var document = JsonDocument.Parse(File.ReadAllText(fullPath), new JsonDocumentOptions
         {
             AllowTrailingCommas = true,
@@ -41,6 +45,10 @@ public static class VsCodeConfigurationImporter
             CursorStyle = Select(GetString(root, "editor.cursorStyle"), ["line", "line-thin", "block", "block-outline", "underline", "underline-thin"], current.CursorStyle),
             LineHeight = Clamp(GetInt(root, "editor.lineHeight"), 0, 100, current.LineHeight),
             RenderWhitespace = Select(GetString(root, "editor.renderWhitespace"), ["none", "boundary", "selection", "trailing", "all"], current.RenderWhitespace),
+            RenderLineHighlight = Select(GetString(root, "editor.renderLineHighlight"), ["none", "gutter", "line", "all"], current.RenderLineHighlight),
+            IndentationGuides = GetBool(root, "editor.guides.indentation") ?? current.IndentationGuides,
+            BracketPairGuides = GetBool(root, "editor.guides.bracketPairs") ?? current.BracketPairGuides,
+            BracketPairColorization = GetBool(root, "editor.bracketPairColorization.enabled") ?? current.BracketPairColorization,
             SmoothScrolling = GetBool(root, "editor.smoothScrolling") ?? current.SmoothScrolling,
             StickyScroll = GetBool(root, "editor.stickyScroll.enabled") ?? current.StickyScroll,
             AutoSave = GetString(root, "files.autoSave") is { } autoSave

@@ -268,10 +268,11 @@ public partial class MainWindow
     {
         var themeService = ((App)Application.Current).ThemeService;
         var credentialStore = new GeminiCredentialStore();
-        var settings = new SettingsWindow(_editorPreferences, themeService.Themes, themeService.CurrentThemeId, credentialStore.HasStoredKey) { Owner = this };
+        var settings = new SettingsWindow(_editorPreferences, themeService.Themes, themeService.CurrentThemeId, credentialStore.HasStoredKey, _gemini.Model) { Owner = this };
         if (settings.ShowDialog() != true) return;
         _editorPreferences = settings.Preferences;
         _preferencesService.Save(_editorPreferences);
+        _gemini.Model = _editorPreferences.GeminiModel ?? _gemini.Model;
         if (!_editorPreferences.GeminiInlineCompletionEnabled)
             foreach (var request in _geminiInlineRequests.Values) request.Cancel();
         FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
@@ -464,6 +465,10 @@ internal sealed class SettingsWindow : Window
     private readonly ComboBox _cursorStyle = new();
     private readonly TextBox _lineHeight = new();
     private readonly ComboBox _renderWhitespace = new();
+    private readonly ComboBox _renderLineHighlight = new();
+    private readonly CheckBox _indentationGuides = new();
+    private readonly CheckBox _bracketPairGuides = new();
+    private readonly CheckBox _bracketPairColorization = new();
     private readonly CheckBox _smoothScrolling = new();
     private readonly CheckBox _stickyScroll = new();
     private readonly CheckBox _autoSave = new();
@@ -472,6 +477,7 @@ internal sealed class SettingsWindow : Window
     private readonly ComboBox _theme = new();
     private readonly TextBox _search = new();
     private readonly PasswordBox _geminiKey = new();
+    private readonly TextBox _geminiModel = new();
     private readonly CheckBox _clearGeminiKey = new();
     private readonly Button _testGemini = new() { Content = "Tester la connexion Gemini", MinWidth = 180, HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TextBlock _geminiTestStatus = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 6, 4, 0) };
@@ -481,7 +487,7 @@ internal sealed class SettingsWindow : Window
     public string? GeminiApiKey => string.IsNullOrWhiteSpace(_geminiKey.Password) ? null : _geminiKey.Password;
     public bool ClearGeminiApiKey => _clearGeminiKey.IsChecked == true;
 
-    public SettingsWindow(EditorPreferences initial, IReadOnlyList<ThemeDefinition> themes, string themeId, bool hasGeminiKey)
+    public SettingsWindow(EditorPreferences initial, IReadOnlyList<ThemeDefinition> themes, string themeId, bool hasGeminiKey, string currentGeminiModel)
     {
         Title = "Paramètres — KeyceCode"; Width = 720; Height = 700; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         SetResourceReference(BackgroundProperty, "WindowBackground");
@@ -520,11 +526,18 @@ internal sealed class SettingsWindow : Window
         ConfigureOptions(_cursorStyle, ["line", "line-thin", "block", "block-outline", "underline", "underline-thin"], initial.CursorStyle); content.Children.Add(Row("Style du curseur", _cursorStyle));
         _lineHeight.Text = initial.LineHeight.ToString(); content.Children.Add(Row("Hauteur de ligne (0 = auto)", _lineHeight));
         ConfigureOptions(_renderWhitespace, ["none", "boundary", "selection", "trailing", "all"], initial.RenderWhitespace); content.Children.Add(Row("Espaces blancs", _renderWhitespace));
+        ConfigureOptions(_renderLineHighlight, ["none", "gutter", "line", "all"], initial.RenderLineHighlight); content.Children.Add(Row("Surlignage de ligne", _renderLineHighlight));
+        _indentationGuides.Content = "Afficher les guides d’indentation"; _indentationGuides.IsChecked = initial.IndentationGuides; content.Children.Add(Row("Guides d’indentation", _indentationGuides));
+        _bracketPairGuides.Content = "Afficher les guides des paires de crochets"; _bracketPairGuides.IsChecked = initial.BracketPairGuides; content.Children.Add(Row("Guides de paires", _bracketPairGuides));
+        _bracketPairColorization.Content = "Colorer les paires de crochets"; _bracketPairColorization.IsChecked = initial.BracketPairColorization; content.Children.Add(Row("Coloration des paires", _bracketPairColorization));
         _smoothScrolling.Content = "Défilement fluide"; _smoothScrolling.IsChecked = initial.SmoothScrolling; content.Children.Add(Row("Défilement", _smoothScrolling));
         _stickyScroll.Content = "Afficher les en-têtes de portée"; _stickyScroll.IsChecked = initial.StickyScroll; content.Children.Add(Row("Sticky scroll", _stickyScroll));
         _autoSave.Content = "Sauvegarder automatiquement après 1 seconde"; _autoSave.IsChecked = initial.AutoSave; content.Children.Add(Row("Sauvegarde", _autoSave));
         _formatOnSave.Content = "Formater avec le serveur LSP avant chaque sauvegarde"; _formatOnSave.IsChecked = initial.FormatOnSave; content.Children.Add(Row("Formatage", _formatOnSave));
         content.Children.Add(new TextBlock { Text = "KeyceIA", FontSize = 16, Margin = new Thickness(0, 18, 0, 8) });
+        _geminiModel.Text = initial.GeminiModel ?? currentGeminiModel;
+        _geminiModel.ToolTip = "Identifiant de modèle Gemini Developer API (ex. gemini-3.8-flash)";
+        content.Children.Add(Row("Modèle Gemini", _geminiModel));
         _geminiInlineCompletion.Content = "Activer les suggestions Gemini inline pendant la frappe";
         _geminiInlineCompletion.IsChecked = initial.GeminiInlineCompletionEnabled;
         content.Children.Add(Row("Autocomplétion Gemini", _geminiInlineCompletion));
@@ -567,7 +580,7 @@ internal sealed class SettingsWindow : Window
         _geminiTestStatus.Text = "Vérification de la clé et du modèle…";
         try
         {
-            using var gemini = new GeminiService(GeminiApiKey);
+            using var gemini = new GeminiService(GeminiApiKey, _geminiModel.Text);
             var reply = await gemini.AskAsync("Réponds uniquement par OK.");
             _geminiTestStatus.Text = reply.Contains("OK", StringComparison.OrdinalIgnoreCase)
                 ? "Connexion réussie : Gemini a répondu."
@@ -597,6 +610,11 @@ internal sealed class SettingsWindow : Window
             MessageBox.Show(this, "La hauteur de ligne doit être comprise entre 0 et 100 (0 sélectionne la valeur automatique).", "Paramètres", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        if (string.IsNullOrWhiteSpace(_geminiModel.Text))
+        {
+            MessageBox.Show(this, "L’identifiant du modèle Gemini ne peut pas être vide.", "KeyceIA", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         Preferences = new EditorPreferences
         {
             FontFamily = string.IsNullOrWhiteSpace(_fontFamily.Text) ? "Cascadia Code, Consolas, monospace" : _fontFamily.Text.Trim(),
@@ -610,11 +628,16 @@ internal sealed class SettingsWindow : Window
             CursorStyle = _cursorStyle.SelectedItem as string ?? "line",
             LineHeight = lineHeight,
             RenderWhitespace = _renderWhitespace.SelectedItem as string ?? "selection",
+            RenderLineHighlight = _renderLineHighlight.SelectedItem as string ?? "all",
+            IndentationGuides = _indentationGuides.IsChecked == true,
+            BracketPairGuides = _bracketPairGuides.IsChecked == true,
+            BracketPairColorization = _bracketPairColorization.IsChecked == true,
             SmoothScrolling = _smoothScrolling.IsChecked == true,
             StickyScroll = _stickyScroll.IsChecked == true,
             AutoSave = _autoSave.IsChecked == true,
             FormatOnSave = _formatOnSave.IsChecked == true,
-            GeminiInlineCompletionEnabled = _geminiInlineCompletion.IsChecked == true
+            GeminiInlineCompletionEnabled = _geminiInlineCompletion.IsChecked == true,
+            GeminiModel = _geminiModel.Text.Trim()
         };
         DialogResult = true;
     }

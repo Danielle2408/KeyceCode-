@@ -926,6 +926,9 @@ public partial class MainWindow : Window
                 cursorStyle = _editorPreferences.CursorStyle,
                 lineHeight = _editorPreferences.LineHeight,
                 renderWhitespace = _editorPreferences.RenderWhitespace,
+                renderLineHighlight = _editorPreferences.RenderLineHighlight,
+                guides = new { indentation = _editorPreferences.IndentationGuides, highlightActiveIndentation = true, bracketPairs = _editorPreferences.BracketPairGuides },
+                bracketPairColorization = new { enabled = _editorPreferences.BracketPairColorization, independentColorPoolPerBracketType = true },
                 smoothScrolling = _editorPreferences.SmoothScrolling,
                 stickyScroll = new { enabled = _editorPreferences.StickyScroll }
             }

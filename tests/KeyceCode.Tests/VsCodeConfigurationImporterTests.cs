@@ -25,6 +25,10 @@ public sealed class VsCodeConfigurationImporterTests
               "editor.cursorStyle": "block",
               "editor.lineHeight": 22,
               "editor.renderWhitespace": "all",
+              "editor.renderLineHighlight": "gutter",
+              "editor.guides.indentation": false,
+              "editor.guides.bracketPairs": false,
+              "editor.bracketPairColorization.enabled": false,
               "editor.smoothScrolling": true,
               "editor.stickyScroll.enabled": false,
               "files.autoSave": "afterDelay",
@@ -47,12 +51,34 @@ public sealed class VsCodeConfigurationImporterTests
             Assert.Equal("block", result.Preferences.CursorStyle);
             Assert.Equal(22, result.Preferences.LineHeight);
             Assert.Equal("all", result.Preferences.RenderWhitespace);
+            Assert.Equal("gutter", result.Preferences.RenderLineHighlight);
+            Assert.False(result.Preferences.IndentationGuides);
+            Assert.False(result.Preferences.BracketPairGuides);
+            Assert.False(result.Preferences.BracketPairColorization);
             Assert.True(result.Preferences.SmoothScrolling);
             Assert.False(result.Preferences.StickyScroll);
             Assert.True(result.Preferences.AutoSave);
             Assert.True(result.Preferences.FormatOnSave);
             Assert.True(result.Preferences.GeminiInlineCompletionEnabled);
             Assert.Equal("dark-plus", result.ThemeId);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Import_RejectsOversizedSettingsFileBeforeParsing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "KeyceCode-VsCodeImport-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var settings = Path.Combine(root, "settings.json");
+        await File.WriteAllTextAsync(settings, new string(' ', VsCodeConfigurationImporter.MaximumSettingsBytes + 1));
+        try
+        {
+            var exception = Assert.Throws<InvalidDataException>(() => VsCodeConfigurationImporter.Import(settings, new EditorPreferences()));
+            Assert.Contains("2 Mio", exception.Message);
         }
         finally
         {
