@@ -15,6 +15,7 @@
   const documentMarkers = new Map();
   const pendingCompletions = new Map();
   const pendingNavigation = new Map();
+  const pendingRefactorRequests = new Map();
   const pendingAiCompletions = new Map();
   let completionSequence = 0;
   let aiCompletionEnabled = false;
@@ -174,6 +175,7 @@
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH, () => post({ type: "command", command: "replace" }));
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, () => post({ type: "command", command: "quickOpen" }));
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space, () => post({ type: "command", command: "geminiComplete" }));
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Period, () => requestCodeActions());
 
     // Real language-aware completion comes from the host's configured LSP process.
     for (const language of ["csharp", "javascript", "javascriptreact", "typescript", "typescriptreact", "json", "jsonc", "html", "css", "scss", "powershell", "python", "go", "rust", "java", "cpp"]) {
@@ -249,6 +251,19 @@
             }).filter(Boolean);
             return contents.length ? { contents } : null;
           });
+        }
+      });
+
+      monaco.languages.registerRenameProvider(language, {
+        provideRenameEdits(model, position, newName, token) {
+          const key = model.uri.toString();
+          const path = modelPathsByUri.get(key);
+          const id = modelIdsByUri.get(key);
+          if (!vscode || !path || !id || typeof newName !== "string" || !newName.trim()) return null;
+          return requestRefactor("rename", {
+            id, path, line: position.lineNumber, column: position.column, newName: newName.trim(),
+            text: model.getValue(), version: model.getVersionId()
+          }, token).then((result) => result?.success ? { edits: [] } : null);
         }
       });
     }
@@ -379,6 +394,49 @@
         line: position.lineNumber,
         column: position.column
       });
+    });
+  }
+
+  function requestRefactor(operation, data, token) {
+    const requestId = `lsp-refactor-${++completionSequence}`;
+    return new Promise((resolve) => {
+      let settled = false;
+      let subscription;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        subscription?.dispose();
+        pendingRefactorRequests.delete(requestId);
+        resolve(value);
+      };
+      const timer = window.setTimeout(() => {
+        post({ type: "lspRefactorCancel", requestId });
+        finish(null);
+      }, 15000);
+      if (token) subscription = token.onCancellationRequested(() => {
+        post({ type: "lspRefactorCancel", requestId });
+        finish(null);
+      });
+      pendingRefactorRequests.set(requestId, finish);
+      post({ type: "lspRenameRequest", requestId, ...data });
+    });
+  }
+
+  function requestCodeActions() {
+    if (!vscode || !editor) return;
+    const model = editor.getModel();
+    const key = model?.uri.toString();
+    const path = key && modelPathsByUri.get(key);
+    const id = key && modelIdsByUri.get(key);
+    if (!model || !path || !id) return;
+    const selection = editor.getSelection();
+    if (!selection) return;
+    post({
+      type: "lspCodeActionRequest", id, path,
+      startLine: selection.startLineNumber, startColumn: selection.startColumn,
+      endLine: selection.endLineNumber, endColumn: selection.endColumn,
+      text: model.getValue(), version: model.getVersionId()
     });
   }
 
@@ -559,6 +617,23 @@
             pendingNavigation.delete(message.requestId);
             resolve(message);
           }
+          break;
+        }
+        case "lspRenameResult": {
+          const finish = pendingRefactorRequests.get(message.requestId);
+          if (finish) finish(message);
+          break;
+        }
+        case "applyWorkspaceTexts": {
+          if (!Array.isArray(message.documents)) break;
+          for (const document of message.documents) {
+            if (typeof document?.id !== "string" || typeof document.text !== "string") continue;
+            const uri = [...modelIdsByUri.entries()].find(([, id]) => id === document.id)?.[0];
+            const model = uri ? models.get(uri) : null;
+            if (!model || model.isDisposed() || model.getValue() === document.text) continue;
+            model.pushEditOperations([], [{ range: model.getFullModelRange(), text: document.text, forceMoveMarkers: true }], () => null);
+          }
+          editor?.focus();
           break;
         }
         case "setAiCompletionEnabled": {

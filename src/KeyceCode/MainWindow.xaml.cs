@@ -694,6 +694,9 @@ public partial class MainWindow : Window
             else if (type == "lspCompletionRequest") await HandleLspCompletionRequestAsync(root);
             else if (type == "lspNavigationRequest") await HandleLspNavigationRequestAsync(root);
             else if (type == "lspNavigationCancel") CancelLspNavigationRequest(ReadString(root, "requestId"));
+            else if (type == "lspRenameRequest") await HandleLspRenameRequestAsync(root);
+            else if (type == "lspRefactorCancel") CancelLspRefactorRequest(ReadString(root, "requestId"));
+            else if (type == "lspCodeActionRequest") await HandleLspCodeActionsAsync(root);
             else if (type == "lspModelActivated") await ActivateLspNavigationModelAsync(root);
             else if (type == "geminiInlineCompletionRequest") await HandleGeminiInlineCompletionRequestAsync(root);
             else if (type == "geminiInlineCompletionCancel") CancelInlineRequest(ReadString(root, "requestId"));
@@ -767,6 +770,22 @@ public partial class MainWindow : Window
             case "find": await PostEditorMessageAsync(new { type = "executeCommand", command = "find" }); break;
             case "replace": await PostEditorMessageAsync(new { type = "executeCommand", command = "replace" }); break;
             case "geminiComplete": await CompleteAtCursorAsync(); break;
+            case "lspCodeActions":
+                if (_activeDocument is { } document)
+                {
+                    var offset = Math.Clamp(_cursorOffset, 0, document.Text.Length);
+                    var lineStart = document.Text.LastIndexOf('\n', Math.Max(0, offset - 1));
+                    if (offset == 0 || lineStart < 0) lineStart = -1;
+                    var line = document.Text[..offset].Count(character => character == '\n') + 1;
+                    var column = offset - lineStart;
+                    await HandleLspCodeActionsAsync(JsonSerializer.SerializeToElement(new
+                    {
+                        id = document.Id, path = document.Path,
+                        startLine = line, startColumn = column, endLine = line, endColumn = column
+                    }));
+                }
+                else StatusMessage.Text = "Ouvrez un fichier avant de demander des actions rapides.";
+                break;
             default: StatusMessage.Text = $"Commande non reconnue : {command}"; break;
         }
     }
