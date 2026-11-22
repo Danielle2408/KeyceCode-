@@ -117,6 +117,7 @@
         id: activeDocument.id,
         line: selection.positionLineNumber,
         column: selection.positionColumn,
+        offset: editor.getModel()?.getOffsetAt(selection.getPosition()) || 0,
         selection: {
           startLine: selection.startLineNumber,
           startColumn: selection.startColumn,
@@ -131,6 +132,7 @@
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => post({ type: "command", command: "find" }));
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH, () => post({ type: "command", command: "replace" }));
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, () => post({ type: "command", command: "quickOpen" }));
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space, () => post({ type: "command", command: "geminiComplete" }));
 
     loading.classList.add("ready");
     post({ type: "ready", capabilities: ["monaco", "models", "multicursor", "format-request", "theme", "options"] });

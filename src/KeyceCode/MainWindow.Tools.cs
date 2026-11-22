@@ -288,14 +288,27 @@ public partial class MainWindow
 
     private async void Complete_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeDocument is null) { StatusMessage.Text = "Ouvrez un fichier avant de demander une complétion."; return; }
+        await CompleteAtCursorAsync();
+    }
+
+    private async Task CompleteAtCursorAsync()
+    {
+        var document = _activeDocument;
+        if (document is null) { StatusMessage.Text = "Ouvrez un fichier avant de demander une complétion."; return; }
         try
         {
-            AssistantOutput.Text = "Génération de la suggestion…";
-            var completion = await _gemini.CompleteAsync(_activeDocument.Text, _activeDocument.Language);
+            var offset = Math.Clamp(_cursorOffset, 0, document.Text.Length);
+            var prefix = document.Text[..offset];
+            if (prefix.Length > 12000) prefix = prefix[^12000..];
+            if (prefix.Trim().Length == 0) { StatusMessage.Text = "Placez le curseur après du code à compléter."; return; }
+            _assistantVisible = true;
+            SecondarySidebarColumn.Width = new GridLength(330);
+            AssistantOutput.Text = "KeyceIA prépare une suggestion au curseur…";
+            var completion = await _gemini.CompleteAsync(prefix, document.Language);
+            if (!ReferenceEquals(document, _activeDocument)) { AssistantOutput.Text = "Suggestion annulée : le fichier actif a changé."; return; }
             await PostEditorMessageAsync(new { type = "insertTextAtCursor", text = completion });
-            AssistantOutput.Text = "Suggestion ajoutée au curseur.";
+            AssistantOutput.Text = "Suggestion insérée. Ctrl+Z permet de l’annuler.";
         }
-        catch (Exception ex) { AssistantOutput.Text = ex.Message; ToggleAssistant_Click(sender, e); }
+        catch (Exception ex) { AssistantOutput.Text = ex.Message; }
     }
 }

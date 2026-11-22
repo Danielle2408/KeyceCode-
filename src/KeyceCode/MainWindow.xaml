@@ -75,7 +75,7 @@
       <!-- Secondary sidebar / KeyceIA -->
       <Border Grid.Column="4" Grid.Row="0" Grid.RowSpan="3" Background="{DynamicResource SidebarBackground}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0" x:Name="SecondarySidebar">
         <DockPanel Margin="10"><StackPanel DockPanel.Dock="Top"><DockPanel><TextBlock Text="KEYCEIA" FontWeight="SemiBold" Foreground="#FFFFA34A" Margin="4,8,0,12"/><Button Content="×" DockPanel.Dock="Right" Click="ToggleAssistant_Click"/></DockPanel><TextBlock Text="Assistant Gemini · le contexte n’est envoyé qu’à votre demande." TextWrapping="Wrap" Foreground="{DynamicResource MutedBrush}" Margin="4,0,4,10"/></StackPanel>
-          <StackPanel DockPanel.Dock="Bottom"><TextBox x:Name="PromptBox" Height="86" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/><Button Content="Envoyer" Click="Ask_Click" Background="{DynamicResource AccentBrush}" HorizontalContentAlignment="Center" Margin="0,8,0,0"/></StackPanel>
+          <StackPanel DockPanel.Dock="Bottom"><TextBox x:Name="PromptBox" Height="86" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/><Button Content="Envoyer" Click="Ask_Click" Background="{DynamicResource AccentBrush}" HorizontalContentAlignment="Center" Margin="0,8,0,0"/><Button Content="Compléter au curseur · Ctrl+Espace" Click="Complete_Click" HorizontalContentAlignment="Center" Margin="0,4,0,0"/></StackPanel>
           <ScrollViewer VerticalScrollBarVisibility="Auto"><TextBlock x:Name="AssistantOutput" Text="Posez une question sur le code sélectionné ou ajoutez un contexte." TextWrapping="Wrap" Foreground="{DynamicResource EditorForeground}" Margin="4,8"/></ScrollViewer>
         </DockPanel>
       </Border>

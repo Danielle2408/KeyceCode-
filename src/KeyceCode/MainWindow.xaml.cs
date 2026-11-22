@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private EditorDocument? _activeDocument;
     private string _activePanel = "Terminal";
     private string? _selectedText;
+    private int _cursorOffset;
     private bool _webReady;
     private bool _syncingDocument;
     private bool _sidebarVisible = true;
@@ -106,6 +107,7 @@ public partial class MainWindow : Window
             {
                 StatusCursor.Content = $"Ln {ReadInt(root, "line", 1)}, Col {ReadInt(root, "column", 1)}";
                 _selectedText = ReadString(root, "selectedText");
+                _cursorOffset = Math.Clamp(ReadInt(root, "offset", _cursorOffset), 0, _activeDocument?.Text.Length ?? 0);
             }
             else if (type == "requestSave")
             {
@@ -144,6 +146,7 @@ public partial class MainWindow : Window
             case "quickOpen": QuickOpen_Click(this, new RoutedEventArgs()); break;
             case "find": await PostEditorMessageAsync(new { type = "executeCommand", command = "find" }); break;
             case "replace": await PostEditorMessageAsync(new { type = "executeCommand", command = "replace" }); break;
+            case "geminiComplete": await CompleteAtCursorAsync(); break;
             default: StatusMessage.Text = $"Commande non reconnue : {command}"; break;
         }
     }
