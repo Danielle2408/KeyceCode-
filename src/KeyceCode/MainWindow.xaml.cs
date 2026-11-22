@@ -108,6 +108,15 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (Path.GetFileName(executable).StartsWith("roslyn-language-server", StringComparison.OrdinalIgnoreCase) &&
+            MessageBox.Show(this,
+                $"Le serveur Roslyn chargera les projets de cet espace de travail et peut exécuter des cibles MSBuild. N’autorisez que les dossiers de confiance.\n\n{workspacePath}\n\nDémarrer le serveur ?",
+                "Confiance de l’espace de travail", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            StatusMessage.Text = "IntelliSense C# désactivé pour cet espace de travail non confirmé.";
+            return;
+        }
+
         var host = new LanguageServerHost();
         host.DiagnosticsPublished += LanguageServer_DiagnosticsPublished;
         host.ServerLogReceived += (_, line) => Dispatcher.BeginInvoke(() => OutputPanel.AppendText("[LSP] " + line + Environment.NewLine));

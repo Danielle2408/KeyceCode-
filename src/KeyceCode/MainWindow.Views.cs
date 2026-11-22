@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.IO;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Text.Json;
 using Microsoft.Win32;
@@ -500,6 +501,8 @@ internal sealed class SettingsWindow : Window
     private readonly CheckBox _clearGeminiKey = new();
     private readonly Button _testGemini = new() { Content = "Tester la connexion Gemini", MinWidth = 180, HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TextBlock _geminiTestStatus = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 6, 4, 0) };
+    private readonly Button _installRoslynLsp = new() { Content = "Installer l’IntelliSense C# (Roslyn)", MinWidth = 230, HorizontalAlignment = HorizontalAlignment.Left };
+    private readonly TextBlock _roslynInstallStatus = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 6, 4, 0) };
 
     public EditorPreferences Preferences { get; private set; } = new();
     public string? SelectedThemeId => _theme.SelectedValue as string;
@@ -567,6 +570,9 @@ internal sealed class SettingsWindow : Window
         };
         lspHelp.SetResourceReference(ForegroundProperty, "MutedBrush");
         content.Children.Add(lspHelp);
+        _installRoslynLsp.Click += InstallRoslynLsp_Click;
+        content.Children.Add(_installRoslynLsp);
+        content.Children.Add(_roslynInstallStatus);
         content.Children.Add(new TextBlock { Text = "KeyceIA", FontSize = 16, Margin = new Thickness(0, 18, 0, 8) });
         _geminiModel.Text = initial.GeminiModel ?? currentGeminiModel;
         _geminiModel.ToolTip = "Identifiant de modèle Gemini Developer API (par défaut : gemini-3.5-flash-lite)";
@@ -624,6 +630,64 @@ internal sealed class SettingsWindow : Window
             _geminiTestStatus.Text = ex.Message;
         }
         finally { _testGemini.IsEnabled = true; }
+    }
+
+    private async void InstallRoslynLsp_Click(object sender, RoutedEventArgs e)
+    {
+        var toolPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet", "tools", "roslyn-language-server.exe");
+        if (File.Exists(toolPath))
+        {
+            ConfigureRoslynLsp(toolPath);
+            _roslynInstallStatus.Text = "Roslyn est déjà installé. Enregistrez les paramètres pour démarrer l’IntelliSense C#.";
+            return;
+        }
+
+        var confirmation = MessageBox.Show(this,
+            "L’installation télécharge le serveur Roslyn de Microsoft. Ce serveur charge les projets C# et peut exécuter des cibles MSBuild. Continuez uniquement avec des dossiers de confiance. Voulez-vous installer le serveur globalement pour votre compte Windows ?",
+            "Installer l’IntelliSense C#", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (confirmation != MessageBoxResult.Yes) return;
+
+        _installRoslynLsp.IsEnabled = false;
+        _roslynInstallStatus.Text = "Installation du serveur Roslyn via le SDK .NET…";
+        try
+        {
+            var startInfo = new ProcessStartInfo("dotnet")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("tool");
+            startInfo.ArgumentList.Add("install");
+            startInfo.ArgumentList.Add("--global");
+            startInfo.ArgumentList.Add("roslyn-language-server");
+            startInfo.ArgumentList.Add("--prerelease");
+            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Le processus dotnet n’a pas démarré.");
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            var output = (await stdoutTask) + Environment.NewLine + (await stderrTask);
+            if (process.ExitCode != 0 || !File.Exists(toolPath))
+            {
+                _roslynInstallStatus.Text = "Échec de l’installation .NET : " + output.Trim();
+                return;
+            }
+
+            ConfigureRoslynLsp(toolPath);
+            _roslynInstallStatus.Text = "Roslyn installé. Enregistrez les paramètres pour démarrer l’IntelliSense C#. " + output.Trim();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            _roslynInstallStatus.Text = "Impossible d’installer Roslyn : " + ex.Message;
+        }
+        finally { _installRoslynLsp.IsEnabled = true; }
+    }
+
+    private void ConfigureRoslynLsp(string executablePath)
+    {
+        _languageServerExecutable.Text = executablePath;
+        _languageServerArguments.Text = JsonSerializer.Serialize(new[] { "--stdio", "--autoLoadProjects" });
     }
 
     private void Save_Click(object? sender, RoutedEventArgs e)
