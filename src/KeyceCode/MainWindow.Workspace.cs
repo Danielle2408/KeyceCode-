@@ -226,7 +226,10 @@ public partial class MainWindow
             var close = new Button { Content = "×", Padding = new Thickness(5, 0, 5, 0), Margin = new Thickness(8, 0, 0, 0), Tag = document, ToolTip = "Fermer l’éditeur" };
             close.Click += CloseTab_Click; content.Children.Add(close);
             var active = ReferenceEquals(document, _activeDocument);
-            var tab = new Button { Content = content, Tag = document, Height = 35, Padding = new Thickness(10, 2, 8, 2), Background = active ? ParseBrush("#FF1E1E1E") : ParseBrush("#FF2D2D2D"), BorderBrush = active ? ParseBrush("#FF007ACC") : Brushes.Transparent, BorderThickness = new Thickness(0, 1, 0, 0), Style = null };
+            var tab = new Button { Content = content, Tag = document, Height = 35, Padding = new Thickness(10, 2, 8, 2), BorderThickness = new Thickness(0, 1, 0, 0) };
+            tab.SetResourceReference(BackgroundProperty, active ? "TabActiveBackground" : "TabBarBackground");
+            tab.SetResourceReference(ForegroundProperty, active ? "ForegroundBrush" : "MutedBrush");
+            tab.SetResourceReference(BorderBrushProperty, active ? "AccentBrush" : "BorderBrush");
             tab.Click += Tab_Click; EditorTabs.Children.Add(tab);
         }
         if (_activeDocument is not null)

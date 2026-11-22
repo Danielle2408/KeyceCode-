@@ -22,6 +22,7 @@ public sealed class ThemeService
     private static readonly IReadOnlyList<ThemeDefinition> ThemeList =
     [
         new("dark-plus", "Dark+", "/KeyceCode;component/Themes/DarkPlus.xaml", false),
+        new("keyce-night", "KeyceCode Night", "/KeyceCode;component/Themes/KeyceNight.xaml", false),
         new("light-plus", "Light+", "/KeyceCode;component/Themes/LightPlus.xaml", false),
         new("dark-high-contrast", "Dark High Contrast", "/KeyceCode;component/Themes/DarkHighContrast.xaml", true),
         new("light-high-contrast", "Light High Contrast", "/KeyceCode;component/Themes/LightHighContrast.xaml", true)

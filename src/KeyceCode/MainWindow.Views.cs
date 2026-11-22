@@ -343,7 +343,9 @@ internal sealed class SettingsWindow : Window
         _ligatures.Content = "Activer les ligatures"; _ligatures.IsChecked = initial.FontLigatures; content.Children.Add(Row("Ligatures", _ligatures));
         _autoSave.Content = "Sauvegarder automatiquement après 1 seconde"; _autoSave.IsChecked = initial.AutoSave; content.Children.Add(Row("Sauvegarde", _autoSave));
         content.Children.Add(new TextBlock { Text = "KeyceIA", FontSize = 16, Margin = new Thickness(0, 18, 0, 8) });
-        content.Children.Add(new TextBlock { Text = "La clé Gemini doit être définie avec GEMINI_API_KEY dans l’environnement. Aucun secret n’est enregistré dans les paramètres.", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.LightGray, Margin = new Thickness(0, 8, 0, 0) });
+        var keyHelp = new TextBlock { Text = "La clé Gemini doit être définie avec GEMINI_API_KEY dans l’environnement. Aucun secret n’est enregistré dans les paramètres.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
+        keyHelp.SetResourceReference(ForegroundProperty, "MutedBrush");
+        content.Children.Add(keyHelp);
         scroll.Content = content; Grid.SetRow(scroll, 2); root.Children.Add(scroll);
         var footer = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0) };
         var cancel = new Button { Content = "Annuler", MinWidth = 90, Margin = new Thickness(0, 0, 8, 0) };

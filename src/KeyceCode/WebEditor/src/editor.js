@@ -83,6 +83,30 @@
         "scrollbarSlider.activeBackground": "#BFBFBF66"
       }
     });
+    monaco.editor.defineTheme("keyce-brand-night", {
+      base: "vs-dark",
+      inherit: true,
+      rules: [
+        { token: "comment", foreground: "8190B3", fontStyle: "italic" },
+        { token: "string", foreground: "F5A97F" },
+        { token: "keyword", foreground: "C792EA" },
+        { token: "number", foreground: "F9C66D" },
+        { token: "type.identifier", foreground: "79D4C8" },
+        { token: "function", foreground: "82AAFF" }
+      ],
+      colors: {
+        "editor.background": "#080F22", "editor.foreground": "#E8EDF8",
+        "editorLineNumber.foreground": "#7180A3", "editorLineNumber.activeForeground": "#E8EDF8",
+        "editorCursor.foreground": "#FF982E", "editor.selectionBackground": "#234777",
+        "editor.inactiveSelectionBackground": "#1B2A4D", "editor.lineHighlightBackground": "#FFFFFF08",
+        "editorIndentGuide.background1": "#233459", "editorIndentGuide.activeBackground1": "#50658D",
+        "editorGutter.background": "#080F22", "editorWidget.background": "#111B36",
+        "editorWidget.border": "#344B75", "editorSuggestWidget.background": "#111B36",
+        "editorSuggestWidget.border": "#344B75", "editorSuggestWidget.selectedBackground": "#234777",
+        "editorOverviewRuler.border": "#7180A34D", "scrollbarSlider.background": "#7180A366",
+        "scrollbarSlider.hoverBackground": "#9BAAC799", "scrollbarSlider.activeBackground": "#E8EDF866"
+      }
+    });
 
     editor = monaco.editor.create(document.getElementById("editor"), {
       value: "",

@@ -21,9 +21,9 @@ dotnet build src/KeyceCode/KeyceCode.csproj --configuration Release
 ## Fonctions intégrées actuellement
 
 - Disposition workbench : Activity Bar, Explorer, zone Monaco à onglets, breadcrumbs, panneau inférieur et barre d’état; fenêtre sans barre de titre Windows en doublon.
-- Ouvrir un dossier/fichier, navigation du workspace, onglets aperçu/épinglés, modifications non enregistrées, création/enregistrement et demande de confirmation avant fermeture.
+- Ouvrir un dossier/fichier, navigation du workspace, création/renommage/suppression confirmée dans l’Explorateur, onglets aperçu/épinglés et demande de confirmation avant fermeture. Le dernier dossier, les fichiers ouverts et l’onglet actif sont restaurés au redémarrage.
 - Monaco local avec coloration syntaxique intégrée, multi-cursor, minimap, numéros de ligne, guides, recherche/remplacement Monaco, paramètres de police, indentation, ligatures, minimap et word wrap.
-- Thèmes WPF Dark+, Light+, Dark High Contrast et Light High Contrast; thème et options d’édition enregistrés dans `%APPDATA%\KeyceCode`.
+- Thèmes WPF Dark+, KeyceCode Night (bleu nuit/orange), Light+, Dark High Contrast et Light High Contrast; thème et options d’édition enregistrés dans `%APPDATA%\KeyceCode`.
 - Recherche workspace par expression régulière et filtre de fichiers; palette de commandes et accès rapide aux fichiers.
 - Terminal PowerShell/cmd persistant via processus redirigé, profils de base, exécution de fichiers/projets .NET, Python, JavaScript et PowerShell. Ce terminal n’utilise pas encore ConPTY/xterm.js.
 - Git : branche/état, stage/unstage/discard par menu contextuel, commit des fichiers déjà stagés.

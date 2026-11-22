@@ -487,6 +487,7 @@ public partial class MainWindow : Window
 
     private static string MonacoTheme(string id) => id switch
     {
+        "keyce-night" => "keyce-brand-night",
         "light-plus" => "vs",
         "dark-high-contrast" => "hc-black",
         "light-high-contrast" => "hc-light",
