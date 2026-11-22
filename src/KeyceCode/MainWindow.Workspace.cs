@@ -379,6 +379,9 @@ public partial class MainWindow
 
     private async void CloseTab_Click(object sender, RoutedEventArgs e)
     {
+        // The close button is inside the tab button. Stop its routed Click event
+        // here so Tab_Click cannot reactivate the document after it was removed.
+        e.Handled = true;
         if (sender is Button { Tag: EditorDocument document }) await CloseDocumentAsync(document);
     }
 
@@ -407,6 +410,7 @@ public partial class MainWindow
         }
         await PostEditorMessageAsync(new { type = "closeDocument", id = document.Id, fallbackId = _activeDocument?.Id ?? "welcome" });
         RefreshTabs();
+        SaveSession();
     }
 
     private async Task<bool> ConfirmDirtyDocumentsAsync()
