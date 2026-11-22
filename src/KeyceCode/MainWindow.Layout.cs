@@ -1,4 +1,5 @@
 using KeyceCode.Services;
+using System.IO;
 using System.Windows;
 
 namespace KeyceCode;
@@ -48,5 +49,37 @@ public partial class MainWindow
             ActiveView = _activeView,
             ActivePanel = _activePanel
         };
+    }
+
+    private void ResetWorkbenchLayout_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState.Normal;
+        var workArea = SystemParameters.WorkArea;
+        Width = Math.Max(MinWidth, Math.Min(1480, workArea.Width));
+        Height = Math.Max(MinHeight, Math.Min(900, workArea.Height));
+        Left = Math.Max(0, (SystemParameters.WorkArea.Width - Width) / 2);
+        Top = Math.Max(0, (SystemParameters.WorkArea.Height - Height) / 2);
+        _rememberedSidebarWidth = 250;
+        _rememberedPanelHeight = 230;
+        _rememberedAssistantWidth = 330;
+        ShowView("Explorer");
+        ShowPanel("Terminal");
+        _sidebarVisible = true;
+        SidebarColumn.Width = new GridLength(_rememberedSidebarWidth);
+        GridSplitterColumn(2, true);
+        _panelVisible = true;
+        PanelRow.Height = new GridLength(_rememberedPanelHeight);
+        PanelSplitter.Visibility = Visibility.Visible;
+        _assistantVisible = false;
+        SecondarySidebarColumn.Width = new GridLength(0);
+        try
+        {
+            _layoutService.Save(CaptureWorkbenchLayout());
+            StatusMessage.Text = "Disposition réinitialisée";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusMessage.Text = "Disposition réinitialisée en mémoire, mais impossible à enregistrer : " + ex.Message;
+        }
     }
 }
