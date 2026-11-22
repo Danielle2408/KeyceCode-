@@ -299,10 +299,14 @@ public partial class MainWindow
         else if (extension is ".bat" or ".cmd") command = isCmd ? $"call {QuoteCmd(path)}" : $"& {Quote(path)}";
         else if (extension == ".cs")
         {
-            var project = FindNearestProject(path, ".csproj");
-            command = project is not null
-                ? $"dotnet run --project {QuotePath(project)}"
-                : $"dotnet run --file {QuotePath(path)}";
+            var selection = SelectNearestProject(path, "Choisir le projet C# à exécuter");
+            if (selection.HasCandidates)
+            {
+                if (selection.Project is null) return;
+                command = $"dotnet run --project {QuotePath(selection.Project)}";
+                directory = Path.GetDirectoryName(selection.Project)!;
+            }
+            else command = $"dotnet run --file {QuotePath(path)}";
         }
         else { StatusMessage.Text = $"Aucune commande Run configurée pour {extension}."; return; }
 
@@ -324,12 +328,14 @@ public partial class MainWindow
         if (extension is ".sln" or ".slnx" or ".csproj") command = $"dotnet build {QuotePath(path)}";
         else if (extension == ".cs")
         {
-            target = FindNearestProject(path, ".csproj") ?? string.Empty;
-            if (target.Length == 0)
+            var selection = SelectNearestProject(path, "Choisir le projet C# à compiler");
+            if (!selection.HasCandidates)
             {
                 StatusMessage.Text = "Aucun projet C# parent. Utilisez Exécuter pour lancer ce fichier C# seul.";
                 return;
             }
+            if (selection.Project is null) return;
+            target = selection.Project;
             command = $"dotnet build {QuotePath(target)}";
         }
         else if (extension == ".py") command = $"python -m py_compile {QuotePath(path)}";
@@ -346,28 +352,15 @@ public partial class MainWindow
             $"Compilation : {Path.GetFileName(buildTarget)}", captureBuildOutput: true);
     }
 
-    private string? FindNearestProject(string sourcePath, string extension)
+    private (string? Project, bool HasCandidates) SelectNearestProject(string sourcePath, string prompt)
     {
-        var root = _workspace?.RootPath;
-        var directory = Path.GetDirectoryName(Path.GetFullPath(sourcePath));
-        var fullRoot = root is null ? null : Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        while (directory is not null)
-        {
-            if (fullRoot is not null)
-            {
-                var relative = Path.GetRelativePath(fullRoot, directory);
-                if (relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) || Path.IsPathRooted(relative)) break;
-            }
-            try
-            {
-                var project = Directory.EnumerateFiles(directory, "*" + extension, SearchOption.TopDirectoryOnly).FirstOrDefault();
-                if (project is not null) return project;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            if (fullRoot is not null && string.Equals(directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), fullRoot, StringComparison.OrdinalIgnoreCase)) break;
-            directory = Directory.GetParent(directory)?.FullName;
-        }
-        return null;
+        var projects = DotNetProjectLocator.FindNearestProjects(sourcePath, _workspace?.RootPath);
+        if (projects.Count == 0) return (null, false);
+        if (projects.Count == 1) return (projects[0], true);
+        var root = _workspace?.RootPath ?? Path.GetDirectoryName(sourcePath)!;
+        var labels = projects.ToDictionary(project => Path.GetRelativePath(root, project), project => project, StringComparer.OrdinalIgnoreCase);
+        var selected = QuickPickWindow.Show(this, prompt, labels.Keys);
+        return (selected is not null && labels.TryGetValue(selected, out var projectPath) ? projectPath : null, true);
     }
 
     private async Task RunInIntegratedTerminalAsync(string command, string workingDirectory, string status,
