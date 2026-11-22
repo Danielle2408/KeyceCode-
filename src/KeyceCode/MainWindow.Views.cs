@@ -209,6 +209,14 @@ public partial class MainWindow
                 keybindingCount = keybindings.Keybindings.Count;
                 skippedKeybindingCount = keybindings.SkippedCount;
             }
+            var extensionsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".vscode", "extensions");
+            VsCodeExtensionImportResult? extensionImport = null;
+            if (Directory.Exists(extensionsPath))
+            {
+                StatusMessage.Text = "Import des paquets d’extensions VS Code…";
+                extensionImport = await Task.Run(() => _vsixExtensions.ImportFromVsCodeAsync(extensionsPath));
+                RefreshInstalledExtensions();
+            }
             _editorPreferences = imported.Preferences;
             _preferencesService.Save(_editorPreferences);
             FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
@@ -221,7 +229,9 @@ public partial class MainWindow
                 $"Préférences compatibles importées depuis :\n{imported.SourcePath}\n\n" +
                 $"{snippets.ImportedSnippets} snippet(s) importé(s) depuis {snippetDirectory} ({snippets.SkippedFiles} fichier(s) ignoré(s)).\n" +
                 $"{keybindingCount} raccourci(s) pris en charge importé(s) ({skippedKeybindingCount} ignoré(s)); fichier recherché : {keybindingsPath}.\n" +
-                $"{imported.ExtensionCount} extension(s) VS Code détectée(s) dans le profil local. Vous pouvez copier leurs paquets depuis la vue Extensions; ils resteront inactifs car KeyceCode n’a pas encore d’hôte d’extensions. Les thèmes tiers ne sont pas appliqués.",
+                $"{extensionImport?.Imported.Count ?? 0} paquet(s) d’extension copié(s) depuis {extensionsPath}" +
+                (extensionImport is null ? " (dossier extensions introuvable)." : $" ({extensionImport.Skipped.Count} ignoré(s)); les extensions restent inactives car KeyceCode n’a pas encore d’hôte d’extensions.") +
+                $"\n{imported.ExtensionCount} extension(s) détectée(s) dans le profil VS Code. Les thèmes tiers ne sont pas appliqués.",
                 "Import Visual Studio Code", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException)
