@@ -59,7 +59,11 @@ public partial class MainWindow
         if (_terminalSession is null || _terminalSession.Completion.IsCompleted)
             await StartTerminalAsync(_activeTerminalProfile ?? "PowerShell 7");
         var line = isCmd ? $"cd /d {QuoteCmd(cwd)} && {commandLine}\r" : $"Set-Location -LiteralPath {Quote(cwd)}; {commandLine}\r";
-        await SendTerminalInputAsync(line);
+        if (!await SendTerminalInputAsync(line))
+        {
+            StatusMessage.Text = "La tâche n’a pas été envoyée au terminal.";
+            return;
+        }
         StatusMessage.Text = $"Tâche lancée : {task.Label}";
     }
 }

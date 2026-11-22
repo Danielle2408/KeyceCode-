@@ -234,17 +234,20 @@ public partial class MainWindow
             _terminalPendingOutput.Remove(0, _terminalPendingOutput.Length - maximumBufferedCharacters);
     }
 
-    private async Task SendTerminalInputAsync(string text)
+    private async Task<bool> SendTerminalInputAsync(string text)
     {
         try
         {
             if (_terminalSession is null || _terminalSession.Completion.IsCompleted)
                 await StartTerminalAsync(_activeTerminalProfile ?? "PowerShell 7");
-            if (_terminalSession is not null) await _terminalSession.SendInputAsync(text);
+            if (_terminalSession is null || _terminalSession.Completion.IsCompleted) return false;
+            await _terminalSession.SendInputAsync(text);
+            return true;
         }
         catch (Exception ex)
         {
             OutputPanel.AppendText("[ConPTY input] " + ex.Message + Environment.NewLine);
+            return false;
         }
     }
 
@@ -382,7 +385,11 @@ public partial class MainWindow
             var line = isCmd
                 ? $"cd /d {QuoteCmd(workingDirectory)} && {command}\r"
                 : $"Set-Location -LiteralPath {Quote(workingDirectory)}; {command}\r";
-            await SendTerminalInputAsync(line);
+            if (!await SendTerminalInputAsync(line))
+            {
+                StatusMessage.Text = "La commande n’a pas été envoyée au terminal. Vérifiez qu’un terminal est démarré.";
+                return;
+            }
             StatusMessage.Text = status;
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
