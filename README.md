@@ -33,7 +33,7 @@ dotnet build src/KeyceCode/KeyceCode.csproj --configuration Release
 
 ## Gemini
 
-Définissez `GEMINI_API_KEY` dans l’environnement du processus pour activer KeyceIA. Le code ne contient aucune clé. Le modèle est configurable via `GEMINI_MODEL`; le défaut est défini dans `GeminiService` et devra être ajusté selon les modèles actuellement disponibles dans la documentation Google.
+Vous pouvez saisir la clé dans **Paramètres > KeyceIA** : elle est chiffrée avec DPAPI pour le compte Windows courant, jamais réaffichée et effaçable depuis ce même écran. `GEMINI_API_KEY` reste disponible comme solution de repli pour le développement. Le modèle est configurable via `GEMINI_MODEL`.
 
 Les clés qui ont été collées dans la conversation doivent être révoquées et remplacées. Ne les ajoutez ni au dépôt, ni aux journaux, ni aux captures.
 

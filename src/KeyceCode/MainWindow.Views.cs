@@ -150,10 +150,21 @@ public partial class MainWindow
     private async void Settings_Click(object sender, RoutedEventArgs e)
     {
         var themeService = ((App)Application.Current).ThemeService;
-        var settings = new SettingsWindow(_editorPreferences, themeService.Themes, themeService.CurrentThemeId) { Owner = this };
+        var credentialStore = new GeminiCredentialStore();
+        var settings = new SettingsWindow(_editorPreferences, themeService.Themes, themeService.CurrentThemeId, credentialStore.HasStoredKey) { Owner = this };
         if (settings.ShowDialog() != true) return;
         _editorPreferences = settings.Preferences;
         _preferencesService.Save(_editorPreferences);
+        try
+        {
+            if (settings.ClearGeminiApiKey) credentialStore.Delete();
+            else if (settings.GeminiApiKey is { } apiKey) credentialStore.Save(apiKey);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
+        {
+            MessageBox.Show(this, "La clé Gemini n’a pas pu être enregistrée de manière sécurisée : " + ex.Message,
+                "KeyceIA", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
         if (settings.SelectedThemeId is not null && settings.SelectedThemeId != themeService.CurrentThemeId)
             themeService.SetTheme(Application.Current, settings.SelectedThemeId);
         await SendEditorOptionsAsync();
@@ -246,13 +257,14 @@ internal sealed class QuickPickWindow : Window
     {
         Title = title; Width = 660; Height = 470; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         WindowStyle = WindowStyle.ToolWindow; ResizeMode = ResizeMode.NoResize;
-        Background = new SolidColorBrush(Color.FromRgb(37, 37, 38)); Foreground = Brushes.White;
+        SetResourceReference(BackgroundProperty, "WindowBackground");
+        SetResourceReference(ForegroundProperty, "ForegroundBrush");
         _source = values.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var dock = new DockPanel { Margin = new Thickness(10) };
         _search.Height = 34; _search.Margin = new Thickness(0, 0, 0, 7); _search.VerticalContentAlignment = VerticalAlignment.Center;
         _search.TextChanged += (_, _) => Filter(); _search.KeyDown += Search_KeyDown;
         DockPanel.SetDock(_search, Dock.Top); dock.Children.Add(_search);
-        _list.Background = Brushes.Transparent; _list.BorderThickness = new Thickness(0); _list.Foreground = Brushes.White;
+        _list.Background = Brushes.Transparent; _list.BorderThickness = new Thickness(0);
         _list.MouseDoubleClick += (_, _) => AcceptSelection(); dock.Children.Add(_list);
         Content = dock; Filter(); Loaded += (_, _) => _search.Focus();
     }
@@ -320,11 +332,15 @@ internal sealed class SettingsWindow : Window
     private readonly CheckBox _autoSave = new();
     private readonly ComboBox _theme = new();
     private readonly TextBox _search = new();
+    private readonly PasswordBox _geminiKey = new();
+    private readonly CheckBox _clearGeminiKey = new();
 
     public EditorPreferences Preferences { get; private set; } = new();
     public string? SelectedThemeId => _theme.SelectedValue as string;
+    public string? GeminiApiKey => string.IsNullOrWhiteSpace(_geminiKey.Password) ? null : _geminiKey.Password;
+    public bool ClearGeminiApiKey => _clearGeminiKey.IsChecked == true;
 
-    public SettingsWindow(EditorPreferences initial, IReadOnlyList<ThemeDefinition> themes, string themeId)
+    public SettingsWindow(EditorPreferences initial, IReadOnlyList<ThemeDefinition> themes, string themeId, bool hasGeminiKey)
     {
         Title = "Paramètres — KeyceCode"; Width = 720; Height = 700; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         SetResourceReference(BackgroundProperty, "WindowBackground");
@@ -361,9 +377,17 @@ internal sealed class SettingsWindow : Window
         _ligatures.Content = "Activer les ligatures"; _ligatures.IsChecked = initial.FontLigatures; content.Children.Add(Row("Ligatures", _ligatures));
         _autoSave.Content = "Sauvegarder automatiquement après 1 seconde"; _autoSave.IsChecked = initial.AutoSave; content.Children.Add(Row("Sauvegarde", _autoSave));
         content.Children.Add(new TextBlock { Text = "KeyceIA", FontSize = 16, Margin = new Thickness(0, 18, 0, 8) });
-        var keyHelp = new TextBlock { Text = "La clé Gemini doit être définie avec GEMINI_API_KEY dans l’environnement. Aucun secret n’est enregistré dans les paramètres.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
+        var keyHelp = new TextBlock { Text = hasGeminiKey
+            ? "Une clé Gemini est enregistrée de manière chiffrée pour votre compte Windows. Saisissez une nouvelle clé pour la remplacer."
+            : "Saisissez une clé Gemini. Elle sera chiffrée avec DPAPI pour votre compte Windows. GEMINI_API_KEY reste disponible pour le développement.",
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
         keyHelp.SetResourceReference(ForegroundProperty, "MutedBrush");
         content.Children.Add(keyHelp);
+        _geminiKey.ToolTip = "Clé API Gemini (la valeur enregistrée n’est jamais affichée)";
+        content.Children.Add(Row("Clé API Gemini", _geminiKey));
+        _clearGeminiKey.Content = "Supprimer la clé enregistrée";
+        _clearGeminiKey.Margin = new Thickness(2, 5, 2, 0);
+        content.Children.Add(_clearGeminiKey);
         scroll.Content = content; Grid.SetRow(scroll, 2); root.Children.Add(scroll);
         var footer = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0) };
         var cancel = new Button { Content = "Annuler", MinWidth = 90, Margin = new Thickness(0, 0, 8, 0) };

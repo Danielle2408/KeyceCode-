@@ -17,14 +17,13 @@ public sealed class GeminiService : IDisposable
     private static readonly Uri ApiRoot = new("https://generativelanguage.googleapis.com/v1beta/");
     private readonly HttpClient _http;
     private readonly bool _ownsClient;
-    private readonly string _apiKey;
+    private readonly string? _explicitApiKey;
+    private readonly GeminiCredentialStore _credentialStore = new();
     private readonly string _model;
 
     public GeminiService(string? apiKey = null, string? model = null, HttpClient? httpClient = null)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey)
-            ? Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? string.Empty
-            : apiKey.Trim();
+        _explicitApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
         _model = string.IsNullOrWhiteSpace(model)
             ? Environment.GetEnvironmentVariable("GEMINI_MODEL") ?? "gemini-3.8-flash"
             : model.Trim();
@@ -61,7 +60,8 @@ public sealed class GeminiService : IDisposable
 
     private async Task<string> GenerateAsync(string prompt, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        var apiKey = _explicitApiKey ?? _credentialStore.Read() ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+        if (string.IsNullOrWhiteSpace(apiKey))
             throw new InvalidOperationException(
                 "Clé Gemini absente. Définissez GEMINI_API_KEY ou fournissez une clé depuis les paramètres sécurisés de l'application.");
 
@@ -87,7 +87,7 @@ public sealed class GeminiService : IDisposable
         {
             Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
         };
-        request.Headers.Add("x-goog-api-key", _apiKey);
+        request.Headers.Add("x-goog-api-key", apiKey);
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
             .ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);

@@ -59,6 +59,11 @@
     <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/><Setter Property="CaretBrush" Value="{DynamicResource ForegroundBrush}"/>
     <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}"/><Setter Property="Padding" Value="6,4"/>
   </Style>
+  <Style TargetType="PasswordBox">
+    <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/><Setter Property="Background" Value="{DynamicResource EditorBackground}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/><Setter Property="CaretBrush" Value="{DynamicResource ForegroundBrush}"/>
+    <Setter Property="Padding" Value="6,4"/>
+  </Style>
   <Style TargetType="CheckBox">
     <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
     <Setter Property="VerticalContentAlignment" Value="Center"/><Setter Property="Margin" Value="2,0"/>
