@@ -575,6 +575,8 @@
       formatSelection: "editor.action.formatSelection",
       commentLine: "editor.action.commentLine",
       uncommentLine: "editor.action.removeCommentLine",
+      insertCursorAbove: "editor.action.insertCursorAbove",
+      insertCursorBelow: "editor.action.insertCursorBelow",
       fold: "editor.fold",
       unfold: "editor.unfold",
       selectAll: "editor.action.selectAll"
