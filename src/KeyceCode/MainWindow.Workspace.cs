@@ -23,6 +23,9 @@ public partial class MainWindow
         try
         {
             _workspace = new WorkspaceService(path);
+            _navigationHistory.Clear();
+            _navigationHistoryIndex = -1;
+            UpdateNavigationButtons();
             WorkspaceTitle.Text = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
             WorkspaceFolderLabel.Text = WorkspaceTitle.Text.ToUpperInvariant();
             await RefreshExplorerAsync();
@@ -126,6 +129,9 @@ public partial class MainWindow
         try
         {
             var newPath = _workspace.RenameEntry(entry.RelativePath, name.Trim());
+            for (var i = 0; i < _navigationHistory.Count; i++)
+                if (string.Equals(_navigationHistory[i], entry.FullPath, StringComparison.OrdinalIgnoreCase))
+                    _navigationHistory[i] = newPath;
             var document = _documents.FirstOrDefault(item => string.Equals(item.Path, entry.FullPath, StringComparison.OrdinalIgnoreCase));
             if (document is not null)
             {
@@ -187,6 +193,7 @@ public partial class MainWindow
         {
             _activeDocument = existing;
             if (pin) existing.IsPreview = false;
+            RecordNavigation(existing.Path);
             RefreshTabs(); await SendDocumentAsync(existing); return;
         }
         if (_activeDocument is { IsPreview: true, IsDirty: false } preview) _documents.Remove(preview);
@@ -198,6 +205,7 @@ public partial class MainWindow
             var kind = WorkspaceService.GetFileKind(path);
             var document = new EditorDocument(path, text, kind.Language) { IsPreview = !pin };
             _documents.Add(document); _activeDocument = document;
+            RecordNavigation(document.Path);
             StatusLanguage.Content = kind.Language;
             RefreshTabs(); await SendDocumentAsync(document); await EnsureLspDocumentAsync(document);
         }
@@ -240,8 +248,51 @@ public partial class MainWindow
     private async void Tab_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: EditorDocument document }) return;
-        _activeDocument = document; RefreshTabs(); await SendDocumentAsync(document);
+        _activeDocument = document; RecordNavigation(document.Path); RefreshTabs(); await SendDocumentAsync(document);
     }
+
+    private void RecordNavigation(string path)
+    {
+        if (_navigatingHistory || string.IsNullOrWhiteSpace(path)) return;
+        var fullPath = Path.GetFullPath(path);
+        if (_navigationHistoryIndex >= 0 && string.Equals(_navigationHistory[_navigationHistoryIndex], fullPath, StringComparison.OrdinalIgnoreCase)) return;
+        if (_navigationHistoryIndex + 1 < _navigationHistory.Count)
+            _navigationHistory.RemoveRange(_navigationHistoryIndex + 1, _navigationHistory.Count - _navigationHistoryIndex - 1);
+        _navigationHistory.Add(fullPath);
+        if (_navigationHistory.Count > 200) _navigationHistory.RemoveAt(0);
+        _navigationHistoryIndex = _navigationHistory.Count - 1;
+        UpdateNavigationButtons();
+    }
+
+    private void UpdateNavigationButtons()
+    {
+        if (NavigateBackButton is not null) NavigateBackButton.IsEnabled = _navigationHistoryIndex > 0;
+        if (NavigateForwardButton is not null) NavigateForwardButton.IsEnabled = _navigationHistoryIndex >= 0 && _navigationHistoryIndex < _navigationHistory.Count - 1;
+    }
+
+    private async Task NavigateHistoryAsync(int direction)
+    {
+        var target = _navigationHistoryIndex + direction;
+        while (target >= 0 && target < _navigationHistory.Count)
+        {
+            var path = _navigationHistory[target];
+            if (File.Exists(path))
+            {
+                _navigationHistoryIndex = target;
+                UpdateNavigationButtons();
+                _navigatingHistory = true;
+                try { await OpenDocumentAsync(path, pin: true); }
+                finally { _navigatingHistory = false; }
+                return;
+            }
+            target += direction;
+        }
+        _navigationHistoryIndex = direction < 0 ? 0 : _navigationHistory.Count - 1;
+        UpdateNavigationButtons();
+    }
+
+    private async void NavigateBack_Click(object sender, RoutedEventArgs e) => await NavigateHistoryAsync(-1);
+    private async void NavigateForward_Click(object sender, RoutedEventArgs e) => await NavigateHistoryAsync(1);
 
     private async void CloseTab_Click(object sender, RoutedEventArgs e)
     {

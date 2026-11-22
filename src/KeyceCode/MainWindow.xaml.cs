@@ -16,6 +16,9 @@ public partial class MainWindow : Window
     private readonly WorkspaceSessionService _sessionService = new();
     private EditorPreferences _editorPreferences;
     private readonly List<EditorDocument> _documents = [];
+    private readonly List<string> _navigationHistory = [];
+    private int _navigationHistoryIndex = -1;
+    private bool _navigatingHistory;
     private readonly Dictionary<string, Uri> _lspDocumentUris = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, LspDiagnostics> _lspDiagnostics = new(StringComparer.OrdinalIgnoreCase);
     private LanguageServerHost? _languageServer;
