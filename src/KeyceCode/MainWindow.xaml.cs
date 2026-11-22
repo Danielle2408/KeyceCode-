@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     private bool _navigatingHistory;
     private readonly Dictionary<string, Uri> _lspDocumentUris = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, LspDiagnostics> _lspDiagnostics = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CancellationTokenSource> _lspNavigationRequests = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CancellationTokenSource> _geminiInlineRequests = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (int Version, int Offset)> _editorSnapshots = new(StringComparer.Ordinal);
     private LanguageServerHost? _languageServer;
@@ -281,6 +282,175 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task HandleLspNavigationRequestAsync(JsonElement message)
+    {
+        var requestId = ReadString(message, "requestId");
+        var operation = ReadString(message, "operation");
+        if (requestId is null || operation is null) return;
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+        _lspNavigationRequests[requestId] = timeout;
+        try
+        {
+            var document = FindDocument(message);
+            var server = _languageServer;
+            if (document is null || server is not { IsInitialized: true } || _workspace is null ||
+                !_lspDocumentUris.TryGetValue(document.Id, out var documentUri))
+            {
+                await PostEditorMessageAsync(new { type = "lspNavigationResult", requestId, operation, locations = Array.Empty<object>() });
+                return;
+            }
+
+            var capabilities = server.ServerCapabilities;
+            var capability = operation switch
+            {
+                "definition" => "definitionProvider",
+                "references" => "referencesProvider",
+                "hover" => "hoverProvider",
+                _ => string.Empty
+            };
+            if (string.IsNullOrEmpty(capability) || !HasLspCapability(capabilities, capability))
+            {
+                await PostEditorMessageAsync(new { type = "lspNavigationResult", requestId, operation, locations = Array.Empty<object>() });
+                return;
+            }
+
+            var line = Math.Max(0, ReadInt(message, "line", 1) - 1);
+            var character = Math.Max(0, ReadInt(message, "column", 1) - 1);
+            var parameters = new Dictionary<string, object?>
+            {
+                ["textDocument"] = new { uri = documentUri.AbsoluteUri },
+                ["position"] = new { line, character }
+            };
+            if (operation == "references") parameters["context"] = new { includeDeclaration = true };
+
+            var method = operation switch
+            {
+                "definition" => "textDocument/definition",
+                "references" => "textDocument/references",
+                "hover" => "textDocument/hover",
+                _ => throw new InvalidOperationException("Unsupported LSP navigation operation.")
+            };
+            var response = await server.RequestAsync(method, parameters, timeout.Token);
+            if (operation == "hover")
+            {
+                await PostEditorMessageAsync(new { type = "lspNavigationResult", requestId, operation, hover = response });
+                return;
+            }
+
+            var candidates = ExtractLspLocations(response);
+            var locations = new List<object>();
+            foreach (var candidate in candidates.Take(500))
+            {
+                timeout.Token.ThrowIfCancellationRequested();
+                if (!TryGetWorkspaceLocation(candidate, out var locationUri, out var range)) continue;
+                var fullPath = Path.GetFullPath(locationUri.LocalPath);
+                if (!IsInsideWorkspace(fullPath, _workspace.RootPath) || !File.Exists(fullPath)) continue;
+                var relativePath = Path.GetRelativePath(_workspace.RootPath, fullPath);
+                try { fullPath = _workspace.ResolvePath(relativePath); }
+                catch (UnauthorizedAccessException) { continue; }
+                if (!File.Exists(fullPath)) continue;
+
+                string text;
+                var openDocument = _documents.FirstOrDefault(item =>
+                    !string.IsNullOrWhiteSpace(item.Path) &&
+                    string.Equals(Path.GetFullPath(item.Path), fullPath, StringComparison.OrdinalIgnoreCase));
+                if (openDocument is not null) text = openDocument.Text;
+                else
+                {
+                    if (new FileInfo(fullPath).Length > 4_000_000) continue;
+                    text = await _workspace.ReadFileAsync(relativePath, timeout.Token);
+                }
+
+                locations.Add(new
+                {
+                    path = fullPath,
+                    workspacePath = relativePath.Replace('\\', '/'),
+                    text,
+                    startLine = range.StartLine,
+                    startCharacter = range.StartCharacter,
+                    endLine = range.EndLine,
+                    endCharacter = range.EndCharacter
+                });
+            }
+
+            await PostEditorMessageAsync(new { type = "lspNavigationResult", requestId, operation, locations });
+        }
+        catch (OperationCanceledException)
+        {
+            await PostEditorMessageAsync(new { type = "lspNavigationResult", requestId, operation, locations = Array.Empty<object>() });
+        }
+        catch (Exception ex)
+        {
+            OutputPanel.AppendText($"[LSP] {operation} : {ex.Message}{Environment.NewLine}");
+            await PostEditorMessageAsync(new { type = "lspNavigationResult", requestId, operation, locations = Array.Empty<object>(), error = ex.Message });
+        }
+        finally
+        {
+            _lspNavigationRequests.Remove(requestId);
+        }
+    }
+
+    private static bool HasLspCapability(JsonElement capabilities, string name) =>
+        capabilities.ValueKind == JsonValueKind.Object && capabilities.TryGetProperty(name, out var value) &&
+        (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.Object);
+
+    private static IEnumerable<JsonElement> ExtractLspLocations(JsonElement response)
+    {
+        if (response.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in response.EnumerateArray()) yield return item;
+            yield break;
+        }
+        if (response.ValueKind == JsonValueKind.Object) yield return response;
+    }
+
+    private static bool TryGetWorkspaceLocation(JsonElement item, out Uri uri, out LspRange range)
+    {
+        uri = null!;
+        range = new LspRange(0, 0, 0, 0);
+        var uriText = ReadString(item, "uri") ?? ReadString(item, "targetUri");
+        if (uriText is null || !Uri.TryCreate(uriText, UriKind.Absolute, out var parsedUri) || !parsedUri.IsFile)
+            return false;
+        var rangeElement = item.TryGetProperty("range", out var ordinaryRange) ? ordinaryRange :
+            item.TryGetProperty("targetSelectionRange", out var selectionRange) ? selectionRange : default;
+        if (rangeElement.ValueKind != JsonValueKind.Object ||
+            !TryGetLspPosition(rangeElement, "start", out var startLine, out var startCharacter) ||
+            !TryGetLspPosition(rangeElement, "end", out var endLine, out var endCharacter)) return false;
+        uri = parsedUri;
+        range = new LspRange(startLine, startCharacter, endLine, endCharacter);
+        return true;
+    }
+
+    private static bool TryGetLspPosition(JsonElement range, string endpoint, out int line, out int character)
+    {
+        line = 0;
+        character = 0;
+        return range.TryGetProperty(endpoint, out var position) &&
+               position.TryGetProperty("line", out var lineElement) && lineElement.TryGetInt32(out line) && line >= 0 &&
+               position.TryGetProperty("character", out var characterElement) && characterElement.TryGetInt32(out character) && character >= 0;
+    }
+
+    private void CancelLspNavigationRequest(string? requestId)
+    {
+        if (requestId is not null && _lspNavigationRequests.TryGetValue(requestId, out var cancellation))
+            cancellation.Cancel();
+    }
+
+    private async Task ActivateLspNavigationModelAsync(JsonElement message)
+    {
+        if (_workspace is null || ReadString(message, "path") is not { } relativePath) return;
+        try
+        {
+            var fullPath = _workspace.ResolvePath(relativePath);
+            if (File.Exists(fullPath)) await OpenDocumentAsync(fullPath, pin: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            OutputPanel.AppendText("[LSP] Cible de navigation ignorée : " + ex.Message + Environment.NewLine);
+        }
+    }
+
     private sealed record LanguageProblem(string Severity, string Message, string File, int Line);
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -429,6 +599,9 @@ public partial class MainWindow : Window
                 }
             }
             else if (type == "lspCompletionRequest") await HandleLspCompletionRequestAsync(root);
+            else if (type == "lspNavigationRequest") await HandleLspNavigationRequestAsync(root);
+            else if (type == "lspNavigationCancel") CancelLspNavigationRequest(ReadString(root, "requestId"));
+            else if (type == "lspModelActivated") await ActivateLspNavigationModelAsync(root);
             else if (type == "geminiInlineCompletionRequest") await HandleGeminiInlineCompletionRequestAsync(root);
             else if (type == "geminiInlineCompletionCancel") CancelInlineRequest(ReadString(root, "requestId"));
             else if (type == "cursorChanged")
