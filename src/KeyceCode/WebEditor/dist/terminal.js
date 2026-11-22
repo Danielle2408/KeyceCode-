@@ -130,7 +130,11 @@
         if (Number.isFinite(options.fontSize)) currentOptions.fontSize = Math.max(8, Math.min(40, options.fontSize));
         if (typeof options.fontFamily === "string" && options.fontFamily.length < 256) currentOptions.fontFamily = options.fontFamily;
         if (Number.isFinite(options.scrollback)) currentOptions.scrollback = Math.max(0, Math.min(100000, options.scrollback));
-        for (const session of sessions.values()) session.terminal.options = { ...session.terminal.options, ...currentOptions };
+        for (const session of sessions.values()) {
+          if (currentOptions.fontSize) session.terminal.options.fontSize = currentOptions.fontSize;
+          if (currentOptions.fontFamily) session.terminal.options.fontFamily = currentOptions.fontFamily;
+          if (currentOptions.scrollback !== undefined) session.terminal.options.scrollback = currentOptions.scrollback;
+        }
         fitAndReport(sessions.get(activeId));
         break;
       }

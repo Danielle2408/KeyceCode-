@@ -653,7 +653,10 @@
           if (model && typeof message.language === "string") monacoApi.editor.setModelLanguage(model, message.language);
           break;
         }
-        case "setOptions": editor?.updateOptions(message.options || {}); break;
+        case "setOptions":
+          primaryEditor?.updateOptions(message.options || {});
+          secondaryEditor?.updateOptions(message.options || {});
+          break;
         case "setUserSnippets": {
           userSnippets = Array.isArray(message.snippets) ? message.snippets.slice(0, 500).filter((snippet) =>
             snippet && typeof snippet.label === "string" && typeof snippet.prefix === "string" && snippet.prefix.length <= 256 &&
