@@ -63,6 +63,9 @@ public sealed class WorkspaceService
     public string CreateFile(string path)
     {
         var safePath = ResolvePath(path);
+        ValidateEntryName(Path.GetFileName(path));
+        if (!Directory.Exists(Path.GetDirectoryName(safePath)))
+            throw new DirectoryNotFoundException("The parent folder does not exist.");
         if (File.Exists(safePath) || Directory.Exists(safePath))
             throw new IOException("An entry with that name already exists.");
         using (File.Create(safePath)) { }
@@ -72,6 +75,9 @@ public sealed class WorkspaceService
     public string CreateDirectory(string path)
     {
         var safePath = ResolvePath(path);
+        ValidateEntryName(Path.GetFileName(path));
+        if (!Directory.Exists(Path.GetDirectoryName(safePath)))
+            throw new DirectoryNotFoundException("The parent folder does not exist.");
         if (File.Exists(safePath) || Directory.Exists(safePath))
             throw new IOException("An entry with that name already exists.");
         Directory.CreateDirectory(safePath);
@@ -80,10 +86,7 @@ public sealed class WorkspaceService
 
     public string RenameEntry(string path, string newName)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(newName);
-        if (newName is "." or ".." || Path.GetFileName(newName) != newName ||
-            newName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-            throw new ArgumentException("Enter a valid name without a directory path.", nameof(newName));
+        ValidateEntryName(newName);
 
         var source = ResolvePath(path);
         if (string.Equals(source, _root, StringComparison.OrdinalIgnoreCase))
@@ -94,6 +97,14 @@ public sealed class WorkspaceService
         if (Directory.Exists(source)) Directory.Move(source, target);
         else File.Move(source, target);
         return target;
+    }
+
+    private static void ValidateEntryName(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        if (name is "." or ".." || Path.GetFileName(name) != name ||
+            name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            throw new ArgumentException("Enter a valid name without a directory path.", nameof(name));
     }
 
     public void DeleteEntry(string path)
