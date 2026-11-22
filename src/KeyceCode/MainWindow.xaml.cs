@@ -50,8 +50,6 @@ public partial class MainWindow : Window
         _editorPreferences = _preferencesService.Load();
         FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
         _autoSaveTimer.Tick += AutoSaveTimer_Tick;
-        TerminalSessions.Items.Add("PowerShell 7");
-        TerminalSessions.SelectedIndex = 0;
         OutputPanel.Text = "KeyceCode output\r\n";
         Loaded += MainWindow_Loaded;
         Closed += MainWindow_Closed;
@@ -480,7 +478,7 @@ public partial class MainWindow : Window
             }
             await InitializeTerminalWebViewAsync(editorRoot);
             await RestoreSessionAsync();
-            await StartTerminalAsync(TerminalSessions.SelectedItem?.ToString() ?? "PowerShell 7");
+            await StartTerminalAsync(_activeTerminalProfile ?? "PowerShell 7");
         }
         catch (Exception ex)
         {

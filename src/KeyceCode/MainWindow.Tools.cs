@@ -71,7 +71,7 @@ public partial class MainWindow
     private async void NewTerminal_Click(object sender, RoutedEventArgs e)
     {
         ShowPanel("Terminal");
-        var profile = TerminalSessions.SelectedItem?.ToString() ?? "PowerShell 7";
+        var profile = _activeTerminalProfile ?? "PowerShell 7";
         await StartTerminalAsync(profile);
         PostTerminalMessage(new { type = "focus" });
     }
@@ -81,17 +81,9 @@ public partial class MainWindow
         var profile = QuickPickWindow.Show(this, "Sélectionner le profil du terminal", new[] { "PowerShell 7", "Windows PowerShell", "Invite de commandes" });
         if (profile is not null)
         {
-            if (!TerminalSessions.Items.Contains(profile)) TerminalSessions.Items.Add(profile);
-            TerminalSessions.SelectedItem = profile;
-            if (_activeTerminalProfile == profile && (_terminalSession is null || _terminalSession.Completion.IsCompleted))
+            if (_activeTerminalProfile != profile || _terminalSession is null || _terminalSession.Completion.IsCompleted)
                 await StartTerminalAsync(profile);
         }
-    }
-
-    private async void TerminalSessions_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (!IsLoaded || TerminalSessions.SelectedItem is not string profile || profile == _activeTerminalProfile) return;
-        await StartTerminalAsync(profile);
     }
 
     private async Task StartTerminalAsync(string profile)
@@ -103,6 +95,7 @@ public partial class MainWindow
         }
         await StopTerminalSessionAsync();
         _activeTerminalProfile = profile;
+        TerminalProfileLabel.Text = profile;
         var isCmd = profile == "Invite de commandes";
         var windowsPowerShell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
         var executable = isCmd ? Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe"
@@ -199,7 +192,7 @@ public partial class MainWindow
         try
         {
             if (_terminalSession is null || _terminalSession.Completion.IsCompleted)
-                await StartTerminalAsync(TerminalSessions.SelectedItem?.ToString() ?? "PowerShell 7");
+                await StartTerminalAsync(_activeTerminalProfile ?? "PowerShell 7");
             if (_terminalSession is not null) await _terminalSession.SendInputAsync(text);
         }
         catch (Exception ex)
@@ -228,7 +221,7 @@ public partial class MainWindow
         var extension = Path.GetExtension(path).ToLowerInvariant();
         var directory = Path.GetDirectoryName(path)!;
         string command;
-        var isCmd = TerminalSessions.SelectedItem?.ToString() == "Invite de commandes";
+        var isCmd = _activeTerminalProfile == "Invite de commandes";
         string QuotePath(string value) => isCmd ? QuoteCmd(value) : Quote(value);
         if (extension == ".csproj") command = $"dotnet run --project {QuotePath(path)}";
         else if (extension == ".sln" || extension == ".slnx") command = $"dotnet build {QuotePath(path)}";
@@ -248,7 +241,7 @@ public partial class MainWindow
 
         ShowPanel("Terminal");
         if (_terminalSession is null || _terminalSession.Completion.IsCompleted)
-            await StartTerminalAsync(TerminalSessions.SelectedItem?.ToString() ?? "PowerShell 7");
+            await StartTerminalAsync(_activeTerminalProfile ?? "PowerShell 7");
         var line = isCmd ? $"cd /d {QuoteCmd(directory)} && {command}\r" : $"Set-Location -LiteralPath {Quote(directory)}; {command}\r";
         await SendTerminalInputAsync(line);
         StatusMessage.Text = $"Lancement : {Path.GetFileName(path)}";
