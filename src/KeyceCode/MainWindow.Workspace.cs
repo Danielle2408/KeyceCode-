@@ -445,6 +445,24 @@ public partial class MainWindow
 
     private async Task<string?> FormatDocumentBeforeSaveAsync(EditorDocument document)
     {
+        if (document.Language is "json" or "jsonc" or "javascript" or "javascriptreact" or "typescript" or "typescriptreact" or "html" or "css" or "scss")
+        {
+            var formattedText = await FormatDocumentInMonacoAsync(document);
+            if (formattedText is not null)
+            {
+                var changed = formattedText != document.Text;
+                if (changed)
+                {
+                    document.Text = formattedText;
+                    document.IsDirty = true;
+                    RefreshTabs();
+                }
+                return changed
+                    ? "Fichier enregistré après formatage Monaco"
+                    : "Fichier enregistré · aucun changement de formatage";
+            }
+        }
+
         var server = _languageServer;
         if (server is null || !server.IsInitialized || _workspace is null ||
             string.IsNullOrWhiteSpace(document.Path) || !IsInsideWorkspace(document.Path, _workspace.RootPath))
@@ -490,6 +508,25 @@ public partial class MainWindow
             OutputPanel.AppendText("[LSP] Formatage avant sauvegarde ignoré; le contenu original est conservé : " + ex.Message + Environment.NewLine);
             return "Fichier enregistré sans formatage (erreur LSP)";
         }
+    }
+
+    private async Task<string?> FormatDocumentInMonacoAsync(EditorDocument document)
+    {
+        if (!_webReady) return null;
+        var requestId = Guid.NewGuid().ToString("N");
+        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingFormatOnSave[requestId] = completion;
+        try
+        {
+            await PostEditorMessageAsync(new { type = "formatForSave", requestId, id = document.Id });
+            return await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TimeoutException)
+        {
+            OutputPanel.AppendText("[Monaco] Délai dépassé pendant le formatage avant sauvegarde.\r\n");
+            return null;
+        }
+        finally { _pendingFormatOnSave.Remove(requestId); }
     }
 
     private static string ApplyLspTextEdits(string source, JsonElement edits)

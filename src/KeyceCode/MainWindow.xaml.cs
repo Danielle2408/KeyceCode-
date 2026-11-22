@@ -33,6 +33,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, CancellationTokenSource> _lspNavigationRequests = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CancellationTokenSource> _geminiInlineRequests = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (int Version, int Offset)> _editorSnapshots = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TaskCompletionSource<string?>> _pendingFormatOnSave = new(StringComparer.Ordinal);
     private LanguageServerHost? _languageServer;
     private WorkspaceService? _workspace;
     private EditorDocument? _activeDocument;
@@ -723,6 +724,12 @@ public partial class MainWindow : Window
                     doc.Text = ReadString(root, "text") ?? doc.Text;
                     await SaveDocumentAsync(doc);
                 }
+            }
+            else if (type == "formatForSaveResult")
+            {
+                var requestId = ReadString(root, "requestId");
+                if (requestId is not null && _pendingFormatOnSave.TryGetValue(requestId, out var completion))
+                    completion.TrySetResult(ReadString(root, "text"));
             }
             else if (type == "requestFormat")
             {

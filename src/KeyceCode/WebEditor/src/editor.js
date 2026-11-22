@@ -586,6 +586,31 @@
     post({ type: "command", command, args: message.args || null });
   }
 
+  async function formatDocumentForSave(message) {
+    const targetEditor = [editor, primaryEditor, secondaryEditor].find((candidate) =>
+      candidate && documentForModel(candidate.getModel())?.id === message.id);
+    const model = targetEditor?.getModel();
+    if (!targetEditor || !model) {
+      post({ type: "formatForSaveResult", requestId: message.requestId, id: message.id, text: null });
+      return;
+    }
+    try {
+      const action = targetEditor.getAction("editor.action.formatDocument");
+      if (!action) {
+        post({ type: "formatForSaveResult", requestId: message.requestId, id: message.id, text: null });
+        return;
+      }
+      const priorSuppression = suppressChanges;
+      suppressChanges = true;
+      try { await action.run(); }
+      finally { suppressChanges = priorSuppression; }
+      post({ type: "formatForSaveResult", requestId: message.requestId, id: message.id, text: model.getValue() });
+    } catch (error) {
+      post({ type: "formatForSaveResult", requestId: message.requestId, id: message.id, text: null });
+      post({ type: "editorError", message: `Formatage avant sauvegarde impossible : ${error?.message || error}` });
+    }
+  }
+
   window.keyce = {
     dispatch(message) {
       if (!message || typeof message !== "object") return;
@@ -702,6 +727,7 @@
           break;
         }
         case "executeCommand": void executeCommand(message); break;
+        case "formatForSave": void formatDocumentForSave(message); break;
         case "requestSave": requestSave(); break;
         case "requestFormat": post({
           type: "requestFormat",

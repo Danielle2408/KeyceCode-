@@ -24,7 +24,7 @@ Host to page:
 - `setTheme`: `{ "type":"setTheme", "theme":"vs-dark|vs|hc-black|keyce-night" }`
 - `setOptions`: `{ "type":"setOptions", "options":{ "fontSize":15, "fontFamily":"Cascadia Code", "tabSize":4, "minimap":{"enabled":false} } }`
 - `executeCommand`: `{ "type":"executeCommand", "command":"undo|redo|find|replace|formatDocument|formatSelection|commentLine|uncommentLine|fold|unfold|selectAll", "args":{} }`
-- `requestSave`, `requestFormat`, `focus`, `layout`, `setReadOnly:{value:true}`, `setDiagnostics:{markers:[MonacoMarker...]}`
+- `requestSave`, `requestFormat`, `formatForSave:{requestId,id}`, `focus`, `layout`, `setReadOnly:{value:true}`, `setDiagnostics:{markers:[MonacoMarker...]}`
 - `applyEdit`: `{ "type":"applyEdit", "text":"replacement full document", "select":null }`; use only after user approval for assistant changes.
 
 Page to host:
@@ -34,6 +34,7 @@ Page to host:
 - `cursorChanged`: `{ "type":"cursorChanged", "id":"doc-id", "line":1, "column":1, "selection":{"startLine":1,"startColumn":1,"endLine":1,"endColumn":1}, "selectedText":"" }`. `selectedText` enables explicit selected-text context for KeyceIA.
 - `requestSave`: includes current `id`, `path`, `text` and `version`; host performs the actual safe file write and replies with save state if needed.
 - `requestFormat`: includes current document text and language; host delegates formatting to a configured language service and returns the formatted text with `applyEdit` only after success.
+- `formatForSaveResult`: returns the formatted Monaco model text for a matching save request; the host waits for this response before writing the file. Monaco edits are suppressed from the debounce bridge during this operation so the save uses the returned text exactly once.
 - `command` for commands managed by the workbench; `editorError` for page/runtime initialization errors.
 
 ## Security and limitations
