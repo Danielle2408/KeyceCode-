@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.IO;
+using System.Net.Http;
 using Microsoft.Win32;
 using KeyceCode.Services;
 
@@ -115,8 +116,10 @@ public partial class MainWindow
             ("Fichier: Enregistrer", () => Save_Click(sender, new RoutedEventArgs())),
             ("Affichage: Explorateur", () => ShowExplorer_Click(sender, new RoutedEventArgs())),
             ("Affichage: Recherche", () => ShowSearch_Click(sender, new RoutedEventArgs())),
+            ("Aller à: Symbole dans l’espace de travail", () => WorkspaceSymbols_Click(sender, new RoutedEventArgs())),
             ("Affichage: Terminal", () => ShowTerminal_Click(sender, new RoutedEventArgs())),
             ("Exécuter: Démarrer", () => Run_Click(sender, new RoutedEventArgs())),
+            ("Compiler: Projet actif", () => Build_Click(sender, new RoutedEventArgs())),
             ("Terminal: Exécuter une tâche…", () => RunTask_Click(sender, new RoutedEventArgs())),
             ("KeyceIA: Ouvrir l’assistant", () => ToggleAssistant_Click(sender, new RoutedEventArgs())),
             ("Préférences: Thème de couleurs", () => Theme_Click(sender, new RoutedEventArgs()))
@@ -351,6 +354,7 @@ public partial class MainWindow
                 case Key.N: NewFile_Click(sender, new RoutedEventArgs()); e.Handled = true; break;
             }
         }
+        else if (e.Key == Key.B && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { Build_Click(sender, new RoutedEventArgs()); e.Handled = true; }
         else if (e.Key == Key.F5 && Keyboard.Modifiers == ModifierKeys.Control) { Run_Click(sender, new RoutedEventArgs()); e.Handled = true; }
         else if (e.Key == Key.F5 && Keyboard.Modifiers == ModifierKeys.None) { Debug_Click(sender, new RoutedEventArgs()); e.Handled = true; }
         else if (e.Key == Key.F5 && Keyboard.Modifiers == ModifierKeys.Shift) { StopRun_Click(sender, new RoutedEventArgs()); e.Handled = true; }
@@ -459,6 +463,8 @@ internal sealed class SettingsWindow : Window
     private readonly TextBox _search = new();
     private readonly PasswordBox _geminiKey = new();
     private readonly CheckBox _clearGeminiKey = new();
+    private readonly Button _testGemini = new() { Content = "Tester la connexion Gemini", MinWidth = 180, HorizontalAlignment = HorizontalAlignment.Left };
+    private readonly TextBlock _geminiTestStatus = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 6, 4, 0) };
 
     public EditorPreferences Preferences { get; private set; } = new();
     public string? SelectedThemeId => _theme.SelectedValue as string;
@@ -527,6 +533,11 @@ internal sealed class SettingsWindow : Window
         content.Children.Add(keyHelp);
         _geminiKey.ToolTip = "Clé API Gemini (la valeur enregistrée n’est jamais affichée)";
         content.Children.Add(Row("Clé API Gemini", _geminiKey));
+        _testGemini.Click += TestGemini_Click;
+        var testPanel = new StackPanel { Margin = new Thickness(0, 6, 0, 8), Tag = "Test connexion Gemini modèle quota" };
+        testPanel.Children.Add(_testGemini);
+        testPanel.Children.Add(_geminiTestStatus);
+        content.Children.Add(testPanel);
         _clearGeminiKey.Content = "Supprimer la clé enregistrée";
         _clearGeminiKey.Margin = new Thickness(2, 5, 2, 0);
         content.Children.Add(_clearGeminiKey);
@@ -538,6 +549,25 @@ internal sealed class SettingsWindow : Window
         save.Click += Save_Click;
         footer.Children.Add(cancel); footer.Children.Add(save); Grid.SetRow(footer, 3); root.Children.Add(footer);
         Content = root;
+    }
+
+    private async void TestGemini_Click(object sender, RoutedEventArgs e)
+    {
+        _testGemini.IsEnabled = false;
+        _geminiTestStatus.Text = "Vérification de la clé et du modèle…";
+        try
+        {
+            using var gemini = new GeminiService(GeminiApiKey);
+            var reply = await gemini.AskAsync("Réponds uniquement par OK.");
+            _geminiTestStatus.Text = reply.Contains("OK", StringComparison.OrdinalIgnoreCase)
+                ? "Connexion réussie : Gemini a répondu."
+                : "Connexion réussie. Réponse reçue : " + reply;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException)
+        {
+            _geminiTestStatus.Text = ex.Message;
+        }
+        finally { _testGemini.IsEnabled = true; }
     }
 
     private void Save_Click(object? sender, RoutedEventArgs e)

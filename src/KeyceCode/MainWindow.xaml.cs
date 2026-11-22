@@ -952,5 +952,4 @@ public partial class MainWindow : Window
         public bool IsPreview { get; set; }
     }
 
-    private sealed record SearchResult(string Path, int Line, string Text);
 }

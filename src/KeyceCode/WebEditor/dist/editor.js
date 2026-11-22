@@ -748,13 +748,17 @@
         }
         case "applyWorkspaceTexts": {
           if (!Array.isArray(message.documents)) break;
-          for (const document of message.documents) {
-            if (typeof document?.id !== "string" || typeof document.text !== "string") continue;
-            const uri = [...modelIdsByUri.entries()].find(([, id]) => id === document.id)?.[0];
-            const model = uri ? models.get(uri) : null;
-            if (!model || model.isDisposed() || model.getValue() === document.text) continue;
-            model.pushEditOperations([], [{ range: model.getFullModelRange(), text: document.text, forceMoveMarkers: true }], () => null);
-          }
+          const priorSuppression = suppressChanges;
+          if (message.suppressChanges === true) suppressChanges = true;
+          try {
+            for (const document of message.documents) {
+              if (typeof document?.id !== "string" || typeof document.text !== "string") continue;
+              const uri = [...modelIdsByUri.entries()].find(([, id]) => id === document.id)?.[0];
+              const model = uri ? models.get(uri) : null;
+              if (!model || model.isDisposed() || model.getValue() === document.text) continue;
+              model.pushEditOperations([], [{ range: model.getFullModelRange(), text: document.text, forceMoveMarkers: true }], () => null);
+            }
+          } finally { suppressChanges = priorSuppression; }
           editor?.focus();
           break;
         }

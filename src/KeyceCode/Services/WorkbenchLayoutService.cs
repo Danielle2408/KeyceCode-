@@ -12,6 +12,8 @@ public sealed record WorkbenchLayout
     public double SidebarWidth { get; init; } = 250;
     public bool PanelVisible { get; init; } = true;
     public double PanelHeight { get; init; } = 230;
+    public string PanelPosition { get; init; } = "Bottom";
+    public double PanelWidth { get; init; } = 320;
     public bool AssistantVisible { get; init; }
     public double AssistantWidth { get; init; } = 330;
     public string ActiveView { get; init; } = "Explorer";
@@ -57,6 +59,8 @@ public sealed class WorkbenchLayoutService
         WindowHeight = Clamp(layout.WindowHeight, 620, 10000, 900),
         SidebarWidth = Clamp(layout.SidebarWidth, 180, 1200, 250),
         PanelHeight = Clamp(layout.PanelHeight, 100, 1200, 230),
+        PanelPosition = layout.PanelPosition is "Bottom" or "Left" or "Right" ? layout.PanelPosition : "Bottom",
+        PanelWidth = Clamp(layout.PanelWidth, 220, 620, 320),
         AssistantWidth = Clamp(layout.AssistantWidth, 240, 1200, 330),
         ActiveView = layout.ActiveView is "Explorer" or "Search" or "SourceControl" or "Run" or "Extensions" ? layout.ActiveView : "Explorer",
         ActivePanel = layout.ActivePanel is "Terminal" or "Problems" or "Output" or "DebugConsole" ? layout.ActivePanel : "Terminal"

@@ -83,19 +83,42 @@ public sealed class GeminiService : IDisposable
             }
         };
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(ApiRoot, relativeUrl))
+        string body;
+        for (var attempt = 0; ; attempt++)
         {
-            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
-        };
-        request.Headers.Add("x-goog-api-key", apiKey);
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(ApiRoot, relativeUrl))
+            {
+                Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+            };
+            request.Headers.Add("x-goog-api-key", apiKey);
+            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+            body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (response.IsSuccessStatusCode) break;
+
+            var transient = response.StatusCode is System.Net.HttpStatusCode.ServiceUnavailable or
+                System.Net.HttpStatusCode.BadGateway or System.Net.HttpStatusCode.GatewayTimeout;
+            var rateLimited = response.StatusCode == System.Net.HttpStatusCode.TooManyRequests;
+            var retryLimit = transient ? 2 : rateLimited ? 1 : 0;
+            if (attempt < retryLimit)
+            {
+                var retryAfter = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(attempt + 1);
+                await Task.Delay(TimeSpan.FromMilliseconds(Math.Clamp(retryAfter.TotalMilliseconds, 250, 10_000)), cancellationToken)
+                    .ConfigureAwait(false);
+                continue;
+            }
+
             var detail = TryReadApiError(body);
+            var diagnosis = response.StatusCode switch
+            {
+                System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden => "La clé Gemini est invalide ou n’a pas accès à l’API.",
+                System.Net.HttpStatusCode.NotFound => "Le modèle Gemini demandé est introuvable ou indisponible pour cette clé.",
+                System.Net.HttpStatusCode.TooManyRequests => "Quota ou limite de requêtes Gemini atteint. Réessayez plus tard ou vérifiez les quotas du projet.",
+                System.Net.HttpStatusCode.ServiceUnavailable or System.Net.HttpStatusCode.BadGateway or System.Net.HttpStatusCode.GatewayTimeout => "Le service Gemini est temporairement saturé ou indisponible après plusieurs essais. Réessayez dans un instant.",
+                _ => detail
+            };
             throw new HttpRequestException(
-                $"Gemini a répondu {(int)response.StatusCode} ({response.ReasonPhrase}). {detail}".Trim());
+                $"Gemini HTTP {(int)response.StatusCode} ({response.ReasonPhrase}). {diagnosis}".Trim(), null, response.StatusCode);
         }
 
         try

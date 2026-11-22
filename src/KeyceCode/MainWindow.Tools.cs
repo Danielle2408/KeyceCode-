@@ -1,6 +1,7 @@
 using KeyceCode.Services;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -11,6 +12,8 @@ namespace KeyceCode;
 public partial class MainWindow
 {
     private string? _activeTerminalProfile;
+    private readonly WorkspaceSearchService _workspaceSearch = new();
+    private CancellationTokenSource? _workspaceSearchCancellation;
 
     private async void SearchQuery_KeyDown(object sender, KeyEventArgs e)
     {
@@ -21,37 +24,88 @@ public partial class MainWindow
     private async Task SearchWorkspaceAsync()
     {
         SearchResults.Items.Clear();
-        if (_workspace is null || string.IsNullOrWhiteSpace(SearchQuery.Text)) return;
+        if (_workspace is null) { SearchStatus.Text = "Ouvrez un dossier pour rechercher dans ses fichiers."; return; }
+        if (string.IsNullOrWhiteSpace(SearchQuery.Text)) { SearchStatus.Text = "Entrez un texte ou une expression régulière à rechercher."; return; }
+        _workspaceSearchCancellation?.Cancel();
+        _workspaceSearchCancellation?.Dispose();
+        _workspaceSearchCancellation = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         try
         {
-            var regex = new Regex(SearchQuery.Text, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
-            var files = await CollectWorkspaceFilesAsync(_workspace.RootPath);
-            var matches = new List<SearchResult>();
-            foreach (var file in files)
+            SearchStatus.Text = "Recherche en cours…";
+            var result = await _workspaceSearch.SearchAsync(_workspace, new WorkspaceSearchOptions(
+                SearchQuery.Text,
+                SearchFilesPattern.Text,
+                SearchExcludePattern.Text,
+                SearchUseRegex.IsChecked == true,
+                SearchMatchCase.IsChecked == true,
+                SearchWholeWord.IsChecked == true), _workspaceSearchCancellation.Token);
+            foreach (var hit in result.Hits)
             {
-                var relative = Path.GetRelativePath(_workspace.RootPath, file);
-                if (!string.IsNullOrWhiteSpace(SearchFilesPattern.Text) && !GlobMatches(relative, SearchFilesPattern.Text.Trim())) continue;
-                try
+                SearchResults.Items.Add(new ListBoxItem
                 {
-                    if (new FileInfo(file).Length > 2_000_000) continue;
-                    var lines = await File.ReadAllLinesAsync(file);
-                    for (var i = 0; i < lines.Length; i++)
-                        if (regex.IsMatch(lines[i]))
-                        {
-                            matches.Add(new SearchResult(file, i + 1, lines[i].Trim()));
-                            if (matches.Count == 1000) break;
-                        }
-                }
-                catch (IOException) { }
-                catch (UnauthorizedAccessException) { }
-                if (matches.Count == 1000) break;
+                    Content = $"{hit.RelativePath}:{hit.Line}:{hit.Column}  {hit.Text.Trim()}",
+                    Tag = hit,
+                    ToolTip = hit.Path
+                });
             }
-            foreach (var match in matches)
-                SearchResults.Items.Add(new ListBoxItem { Content = $"{Path.GetFileName(match.Path)}:{match.Line}  {match.Text}", Tag = match, ToolTip = match.Path });
-            StatusMessage.Text = $"{matches.Count} résultat(s)";
+            SearchStatus.Text = $"{result.Hits.Count:N0} résultat(s) dans {result.FilesSearched:N0} fichier(s) · {result.FilesSkipped:N0} ignoré(s)" +
+                (result.Truncated ? " · résultats limités; ajoutez un filtre pour réduire la recherche." : string.Empty);
+            StatusMessage.Text = $"Recherche : {result.Hits.Count:N0} résultat(s)";
         }
-        catch (ArgumentException ex) { StatusMessage.Text = "Expression incorrecte : " + ex.Message; }
-        catch (RegexMatchTimeoutException) { StatusMessage.Text = "La recherche a dépassé son délai."; }
+        catch (RegexMatchTimeoutException) { SearchStatus.Text = "L’expression régulière a dépassé le délai d’une seconde; simplifiez-la."; }
+        catch (ArgumentException ex) { SearchStatus.Text = "Expression incorrecte : " + ex.Message; }
+        catch (OperationCanceledException) { SearchStatus.Text = "Recherche annulée."; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        { SearchStatus.Text = "La recherche a échoué : " + ex.Message; }
+    }
+
+    private async void PreviewReplace_Click(object sender, RoutedEventArgs e)
+    {
+        if (_workspace is null) { SearchStatus.Text = "Ouvrez un dossier avant de remplacer dans les fichiers."; return; }
+        if (string.IsNullOrWhiteSpace(SearchQuery.Text)) { SearchStatus.Text = "Entrez un texte ou une expression régulière à rechercher."; return; }
+        try
+        {
+            foreach (var document in _documents.Where(document => document.IsDirty && !string.IsNullOrWhiteSpace(document.Path) && IsInsideWorkspace(document.Path, _workspace.RootPath)).ToArray())
+                if (!await SaveDocumentAsync(document)) { SearchStatus.Text = "Remplacement annulé; les fichiers modifiés n’ont pas été prévisualisés."; return; }
+
+            var options = new WorkspaceSearchOptions(SearchQuery.Text, SearchFilesPattern.Text, SearchExcludePattern.Text,
+                SearchUseRegex.IsChecked == true, SearchMatchCase.IsChecked == true, SearchWholeWord.IsChecked == true);
+            SearchStatus.Text = "Préparation de l’aperçu…";
+            var preview = await _workspaceSearch.PreviewReplaceAsync(_workspace, options, SearchReplacement.Text);
+            if (preview.TotalMatches == 0) { SearchStatus.Text = $"Aucun remplacement · {preview.FilesSkipped} fichier(s) ignoré(s)."; return; }
+            var apply = WorkspaceReplacePreviewWindow.Show(this, preview);
+            if (!apply) { SearchStatus.Text = "Aucun fichier modifié; aperçu annulé."; return; }
+            if (preview.Truncated) { SearchStatus.Text = "Aucun changement appliqué : l’aperçu est tronqué. Ajoutez un filtre."; return; }
+
+            var applied = await _workspaceSearch.ApplyPreviewAsync(_workspace, preview);
+            var updatedDocuments = new List<object>();
+            foreach (var document in _documents.Where(document => !string.IsNullOrWhiteSpace(document.Path)).ToArray())
+            {
+                var changed = preview.Files.Any(file => string.Equals(Path.GetFullPath(file.Path), Path.GetFullPath(document.Path!), StringComparison.OrdinalIgnoreCase));
+                if (!changed) continue;
+                var (text, encodingId) = await ReadTextFileAsync(document.Path!);
+                document.Text = text;
+                document.EncodingId = encodingId;
+                document.IsDirty = false;
+                document.LineEnding = text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : text.Contains('\n') ? "\n" : text.Contains('\r') ? "\r" : Environment.NewLine;
+                updatedDocuments.Add(new { id = document.Id, text });
+                if (_languageServer is { IsInitialized: true } && _lspDocumentUris.TryGetValue(document.Id, out var uri))
+                {
+                    try { await _languageServer.ChangeDocumentAsync(uri, text); }
+                    catch (Exception ex) { OutputPanel.AppendText("[LSP] Synchronisation après remplacement : " + ex.Message + Environment.NewLine); }
+                }
+            }
+            if (updatedDocuments.Count > 0)
+                await PostEditorMessageAsync(new { type = "applyWorkspaceTexts", suppressChanges = true, documents = updatedDocuments });
+            RefreshTabs();
+            await RefreshExplorerAsync();
+            SearchStatus.Text = $"{applied.MatchesReplaced:N0} remplacement(s) dans {applied.FilesChanged:N0} fichier(s).";
+            StatusMessage.Text = "Remplacement terminé";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or DecoderFallbackException or RegexMatchTimeoutException)
+        {
+            SearchStatus.Text = "Aucun remplacement confirmé : " + ex.Message;
+        }
     }
 
     private static bool GlobMatches(string path, string glob)
@@ -63,7 +117,7 @@ public partial class MainWindow
 
     private async void SearchResults_DoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (SearchResults.SelectedItem is not ListBoxItem { Tag: SearchResult match }) return;
+        if (SearchResults.SelectedItem is not ListBoxItem { Tag: WorkspaceSearchHit match }) return;
         await OpenDocumentAsync(match.Path, pin: true);
         await PostEditorMessageAsync(new { type = "executeCommand", command = "editor.action.gotoLine", args = match.Line });
     }
@@ -180,22 +234,94 @@ public partial class MainWindow
         else if (extension is ".js" or ".mjs") command = $"node {QuotePath(path)}";
         else if (extension == ".ps1") command = isCmd ? $"powershell.exe -ExecutionPolicy Bypass -File {QuoteCmd(path)}" : $"& {Quote(path)}";
         else if (extension is ".bat" or ".cmd") command = isCmd ? $"call {QuoteCmd(path)}" : $"& {Quote(path)}";
-        else if (extension == ".cs" && _workspace is not null)
+        else if (extension == ".cs")
         {
-            var project = Directory.EnumerateFiles(_workspace.RootPath, "*.csproj", SearchOption.AllDirectories)
-                .FirstOrDefault(file => !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) && !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
-            command = project is null
-                ? isCmd ? "echo Aucun fichier projet .csproj trouve." : "Write-Error 'Aucun fichier projet .csproj trouvé.'"
-                : $"dotnet run --project {QuotePath(project)}";
+            var project = FindNearestProject(path, ".csproj");
+            command = project is not null
+                ? $"dotnet run --project {QuotePath(project)}"
+                : $"dotnet run --file {QuotePath(path)}";
         }
         else { StatusMessage.Text = $"Aucune commande Run configurée pour {extension}."; return; }
 
-        ShowPanel("Terminal");
-        if (_terminalSession is null || _terminalSession.Completion.IsCompleted)
-            await StartTerminalAsync(_activeTerminalProfile ?? "PowerShell 7");
-        var line = isCmd ? $"cd /d {QuoteCmd(directory)} && {command}\r" : $"Set-Location -LiteralPath {Quote(directory)}; {command}\r";
-        await SendTerminalInputAsync(line);
-        StatusMessage.Text = $"Lancement : {Path.GetFileName(path)}";
+        await RunInIntegratedTerminalAsync(command, directory, $"Lancement : {Path.GetFileName(path)}");
+    }
+
+    private async void Build_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeDocument is null) { StatusMessage.Text = "Ouvrez un fichier ou projet avant de compiler."; return; }
+        if (_activeDocument.IsDirty && !await SaveDocumentAsync(_activeDocument)) return;
+        var path = _activeDocument.Path;
+        if (string.IsNullOrWhiteSpace(path)) { StatusMessage.Text = "Enregistrez le fichier avant de compiler."; return; }
+
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        var isCmd = _activeTerminalProfile == "Invite de commandes";
+        string QuotePath(string value) => isCmd ? QuoteCmd(value) : Quote(value);
+        string command;
+        var target = path;
+        if (extension is ".sln" or ".slnx" or ".csproj") command = $"dotnet build {QuotePath(path)}";
+        else if (extension == ".cs")
+        {
+            target = FindNearestProject(path, ".csproj") ?? string.Empty;
+            if (target.Length == 0)
+            {
+                StatusMessage.Text = "Aucun projet C# parent. Utilisez Exécuter pour lancer ce fichier C# seul.";
+                return;
+            }
+            command = $"dotnet build {QuotePath(target)}";
+        }
+        else if (extension == ".py") command = $"python -m py_compile {QuotePath(path)}";
+        else if (extension is ".js" or ".mjs" or ".cjs") command = $"node --check {QuotePath(path)}";
+        else
+        {
+            StatusMessage.Text = $"Aucune commande de compilation configurée pour {extension}.";
+            return;
+        }
+
+        await RunInIntegratedTerminalAsync(command, Path.GetDirectoryName(path)!, $"Compilation : {Path.GetFileName(target.Length == 0 ? path : target)}");
+    }
+
+    private string? FindNearestProject(string sourcePath, string extension)
+    {
+        var root = _workspace?.RootPath;
+        var directory = Path.GetDirectoryName(Path.GetFullPath(sourcePath));
+        var fullRoot = root is null ? null : Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        while (directory is not null)
+        {
+            if (fullRoot is not null)
+            {
+                var relative = Path.GetRelativePath(fullRoot, directory);
+                if (relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) || Path.IsPathRooted(relative)) break;
+            }
+            try
+            {
+                var project = Directory.EnumerateFiles(directory, "*" + extension, SearchOption.TopDirectoryOnly).FirstOrDefault();
+                if (project is not null) return project;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            if (fullRoot is not null && string.Equals(directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), fullRoot, StringComparison.OrdinalIgnoreCase)) break;
+            directory = Directory.GetParent(directory)?.FullName;
+        }
+        return null;
+    }
+
+    private async Task RunInIntegratedTerminalAsync(string command, string workingDirectory, string status)
+    {
+        try
+        {
+            ShowPanel("Terminal");
+            if (_terminalSession is null || _terminalSession.Completion.IsCompleted)
+                await StartTerminalAsync(_activeTerminalProfile ?? "PowerShell 7");
+            var isCmd = _activeTerminalProfile == "Invite de commandes";
+            var line = isCmd
+                ? $"cd /d {QuoteCmd(workingDirectory)} && {command}\r"
+                : $"Set-Location -LiteralPath {Quote(workingDirectory)}; {command}\r";
+            await SendTerminalInputAsync(line);
+            StatusMessage.Text = status;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            StatusMessage.Text = "Impossible de lancer la commande dans le terminal : " + ex.Message;
+        }
     }
 
     private void Debug_Click(object sender, RoutedEventArgs e)
