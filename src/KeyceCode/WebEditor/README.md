@@ -41,7 +41,7 @@ Page to host:
 
 The bridge only accepts the documented message types and does not expose arbitrary file or process access to JavaScript. File I/O, command execution, LSP, and formatting remain host responsibilities. Treat all messages as untrusted input and validate IDs, sizes, paths, ranges and command names in C#.
 
-Monaco supplies the browser editor, built-in syntax tokenization and selected browser language tooling. It is not the full VS Code Workbench and does not provide C# IntelliSense, external language servers, formatting, debugging, tasks, Git, or VS Code extension-host compatibility by itself. Add these through explicit LSP/DAP/host integrations.
+Monaco supplies the browser editor, built-in syntax tokenization, and selected language tooling/formatters for JSON, JavaScript, TypeScript, HTML, and CSS. C# formatting and IntelliSense require a configured language server. Monaco is not the full VS Code Workbench; debugging, tasks, Git, and VS Code extension-host compatibility require explicit host integrations.
 
 ## Integrated xterm.js terminal
 
