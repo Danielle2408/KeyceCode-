@@ -933,16 +933,16 @@ public partial class MainWindow
         var userMessage = PromptBox.Text.Trim();
         if (userMessage.Length == 0) return;
         PromptBox.Tag = null;
-        AssistantOutput.Text = "Lecture du contexte joint…";
+        SetAssistantOutput("Lecture du contexte joint…");
         AiProposalPreview.Visibility = Visibility.Collapsed;
         try
         {
             var prompt = await BuildAssistantPromptAsync(userMessage);
-            AssistantOutput.Text = "KeyceIA réfléchit…";
-            AssistantOutput.Text = await _gemini.AskAsync(prompt);
+            SetAssistantOutput("KeyceIA réfléchit…");
+            SetAssistantOutput(await _gemini.AskAsync(prompt));
             if (string.Equals(PromptBox.Text.Trim(), userMessage, StringComparison.Ordinal)) PromptBox.Clear();
         }
-        catch (Exception ex) { AssistantOutput.Text = ex.Message; }
+        catch (Exception ex) { SetAssistantOutput(ex.Message); }
     }
 
     private async Task<string> BuildAssistantPromptAsync(string message)
@@ -1124,23 +1124,23 @@ public partial class MainWindow
     {
         var document = _activeDocument;
         var instruction = PromptBox.Text.Trim();
-        if (document is null) { AssistantOutput.Text = "Ouvre un fichier avant de demander une modification."; return; }
-        if (instruction.Length == 0) { AssistantOutput.Text = "Écris d’abord la modification souhaitée."; return; }
+        if (document is null) { SetAssistantOutput("Ouvre un fichier avant de demander une modification."); return; }
+        if (instruction.Length == 0) { SetAssistantOutput("Écris d’abord la modification souhaitée."); return; }
         PromptBox.Tag = null;
         AiProposalPreview.Visibility = Visibility.Collapsed;
         try
         {
             _assistantVisible = true;
             SecondarySidebarColumn.Width = new GridLength(330);
-            AssistantOutput.Text = "KeyceIA prépare une version complète du fichier pour relecture…";
+            SetAssistantOutput("KeyceIA prépare une version complète du fichier pour relecture…");
             var edited = await _gemini.EditDocumentAsync(instruction, document.Text, document.Language);
-            if (!ReferenceEquals(document, _activeDocument)) { AssistantOutput.Text = "Proposition annulée : le fichier actif a changé."; return; }
+            if (!ReferenceEquals(document, _activeDocument)) { SetAssistantOutput("Proposition annulée : le fichier actif a changé."); return; }
             PromptBox.Tag = new AiEditProposal(document, document.Text, 0, edited, "document");
             AiProposalPreview.Text = edited;
             AiProposalPreview.Visibility = Visibility.Visible;
-            AssistantOutput.Text = "Document modifié par KeyceIA en attente de validation. Relis la consigne et clique sur Appliquer au fichier.";
+            SetAssistantOutput("Document modifié par KeyceIA en attente de validation. Relis la consigne et clique sur Appliquer au fichier.");
         }
-        catch (Exception ex) { AssistantOutput.Text = ex.Message; }
+        catch (Exception ex) { SetAssistantOutput(ex.Message); }
     }
 
     private async Task CompleteAtCursorAsync()
@@ -1157,15 +1157,15 @@ public partial class MainWindow
             if (prefix.Trim().Length == 0) { StatusMessage.Text = "Placez le curseur après du code à compléter."; return; }
             _assistantVisible = true;
             SecondarySidebarColumn.Width = new GridLength(330);
-            AssistantOutput.Text = "KeyceIA prépare une suggestion au curseur…";
+            SetAssistantOutput("KeyceIA prépare une suggestion au curseur…");
             var completion = await _gemini.CompleteAsync(prefix, document.Language);
-            if (!ReferenceEquals(document, _activeDocument)) { AssistantOutput.Text = "Suggestion annulée : le fichier actif a changé."; return; }
+            if (!ReferenceEquals(document, _activeDocument)) { SetAssistantOutput("Suggestion annulée : le fichier actif a changé."); return; }
             PromptBox.Tag = new AiEditProposal(document, document.Text, _cursorOffset, completion, "completion");
             AiProposalPreview.Text = completion;
             AiProposalPreview.Visibility = Visibility.Visible;
-            AssistantOutput.Text = "Suggestion prête. Elle n’a pas encore été insérée.";
+            SetAssistantOutput("Suggestion prête. Elle n’a pas encore été insérée.");
         }
-        catch (Exception ex) { AssistantOutput.Text = ex.Message; }
+        catch (Exception ex) { SetAssistantOutput(ex.Message); }
     }
 
     private sealed record AiEditProposal(EditorDocument Document, string OriginalText, int Offset, string ProposedText, string Kind);
@@ -1174,12 +1174,12 @@ public partial class MainWindow
     {
         if (PromptBox.Tag is not AiEditProposal proposal || !ReferenceEquals(proposal.Document, _activeDocument))
         {
-            AssistantOutput.Text = "Aucune proposition applicable au fichier actif.";
+            SetAssistantOutput("Aucune proposition applicable au fichier actif.");
             return;
         }
         if (!string.Equals(proposal.OriginalText, proposal.Document.Text, StringComparison.Ordinal))
         {
-            AssistantOutput.Text = "Le fichier a changé depuis la proposition. Demande une nouvelle suggestion pour éviter d’écraser ton travail.";
+            SetAssistantOutput("Le fichier a changé depuis la proposition. Demande une nouvelle suggestion pour éviter d’écraser ton travail.");
             PromptBox.Tag = null;
             return;
         }
@@ -1188,11 +1188,11 @@ public partial class MainWindow
         if (result != MessageBoxResult.Yes) return;
         if (!await ApplyAiEditToEditorAsync(proposal.Document, proposal))
         {
-            AssistantOutput.Text = "Aucune modification appliquée. Le fichier a peut-être changé pendant la génération ; vérifie le message dans Sortie et demande une nouvelle proposition.";
+            SetAssistantOutput("Aucune modification appliquée. Le fichier a peut-être changé pendant la génération ; vérifie le message dans Sortie et demande une nouvelle proposition.");
             return;
         }
         PromptBox.Tag = null;
-        AssistantOutput.Text = "Modification appliquée au fichier. Ctrl+Z permet de l’annuler ; Ctrl+S l’enregistre.";
+        SetAssistantOutput("Modification appliquée au fichier. Ctrl+Z permet de l’annuler ; Ctrl+S l’enregistre.");
     }
 
     private void RejectAiEdit_Click(object sender, RoutedEventArgs e)
@@ -1200,6 +1200,6 @@ public partial class MainWindow
         PromptBox.Tag = null;
         AiProposalPreview.Visibility = Visibility.Collapsed;
         PromptBox.Clear();
-        AssistantOutput.Text = "Proposition rejetée ; le fichier reste inchangé.";
+        SetAssistantOutput("Proposition rejetée ; le fichier reste inchangé.");
     }
 }

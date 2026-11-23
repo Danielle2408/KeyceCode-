@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private WorkspaceService? _workspace;
     private IReadOnlyList<string> _recentWorkspaces = [];
     private EditorDocument? _activeDocument;
+    private string _assistantMarkdown = "Posez une question sur le code sélectionné ou ajoutez un contexte.";
     private string _activePanel = "Terminal";
     private string? _selectedText;
     private int _cursorOffset;
@@ -52,6 +53,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        RenderAssistantOutput();
         InitializeExtensionList();
         _editorPreferences = _preferencesService.Load();
         UpdateGeminiInlineCompletionPauseButton();
@@ -66,6 +68,7 @@ public partial class MainWindow : Window
             StatusMessage.Text = $"Thème appliqué : {theme.DisplayName}";
             _ = PostEditorMessageAsync(new { type = "setTheme", theme = MonacoTheme(theme.Id) });
             PostTerminalMessage(new { type = "setTheme", theme = TerminalTheme(theme.Id) });
+            RenderAssistantOutput();
         };
     }
 
@@ -995,6 +998,23 @@ public partial class MainWindow : Window
     private Task SendUserSnippetsAsync() => PostEditorMessageAsync(new { type = "setUserSnippets", snippets = _snippetService.Load() });
 
     private static Brush ParseBrush(string color) => (Brush)new BrushConverter().ConvertFromString(color)!;
+
+    private void SetAssistantOutput(string markdown)
+    {
+        _assistantMarkdown = markdown ?? string.Empty;
+        RenderAssistantOutput();
+    }
+
+    private void RenderAssistantOutput()
+    {
+        if (AssistantOutput is null) return;
+        var theme = ((App)Application.Current).ThemeService.CurrentThemeId;
+        var text = TryFindResource("EditorForeground") as Brush ?? Foreground ?? Brushes.White;
+        var editorBackground = TryFindResource("EditorBackground") as Brush ?? Brushes.Transparent;
+        var border = TryFindResource("BorderBrush") as Brush ?? Brushes.Gray;
+        AssistantOutput.Document = AssistantMarkdownRenderer.Render(_assistantMarkdown, theme, text, editorBackground, border);
+        AssistantOutput.ScrollToEnd();
+    }
 
     private static string MonacoTheme(string id) => id switch
     {
