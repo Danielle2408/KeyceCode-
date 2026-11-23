@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Text.Json;
 
 namespace KeyceCode;
 
@@ -11,6 +12,9 @@ public partial class MainWindow
 {
     private readonly ExtensionGalleryService _extensionGallery = new();
     private readonly VsixExtensionService _vsixExtensions = new();
+    private readonly HashSet<string> _activeExtensionIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<(string ExtensionId, string Command), (string Title, string Description)> _extensionCommands = [];
+    private ExtensionHostService? _extensionHost;
 
     private void InitializeExtensionList() => RefreshInstalledExtensions();
 
@@ -18,10 +22,156 @@ public partial class MainWindow
     {
         InstalledExtensions.Items.Clear();
         foreach (var extension in _vsixExtensions.GetInstalled())
-            InstalledExtensions.Items.Add($"{extension.Id}  ·  {extension.Version}");
+            InstalledExtensions.Items.Add($"{(_activeExtensionIds.Contains(extension.Id) ? "● Active" : "○ Inactive")}  {extension.Id}  ·  {extension.Version}");
         InstalledExtensionsStatus.Text = InstalledExtensions.Items.Count == 0
             ? $"Aucune extension installée · {_vsixExtensions.ExtensionRoot}"
-            : $"{InstalledExtensions.Items.Count} extension(s) · {_vsixExtensions.ExtensionRoot}";
+            : $"{InstalledExtensions.Items.Count} extension(s) · {_activeExtensionIds.Count} active(s)";
+    }
+
+    private async void ActivateInstalledExtension_Click(object sender, RoutedEventArgs e)
+    {
+        var installed = _vsixExtensions.GetInstalled();
+        if (installed.Count == 0)
+        {
+            ExtensionHostStatus.Text = "Aucune extension installée à activer.";
+            return;
+        }
+        var choices = installed.ToDictionary(extension => $"{extension.Id}@{extension.Version} · {extension.DisplayName}", extension => extension, StringComparer.OrdinalIgnoreCase);
+        var selected = QuickPickWindow.Show(this, "Choisir une extension à activer", choices.Keys);
+        if (selected is null || !choices.TryGetValue(selected, out var extension)) return;
+        if (_activeExtensionIds.Contains(extension.Id))
+        {
+            ExtensionHostStatus.Text = $"{extension.Id} est déjà active.";
+            return;
+        }
+
+        var consent = MessageBox.Show(this,
+            $"Activer {extension.Id}@{extension.Version} ?\n\nLe code de cette extension sera exécuté par Node.js avec les droits de ton compte Windows. Le processus est séparé de KeyceCode, mais il n’est pas sandboxé et peut accéder aux fichiers et au réseau. N’active que du code auquel tu fais confiance.",
+            "Autoriser l’exécution de l’extension", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (consent != MessageBoxResult.Yes) return;
+
+        ActivateExtensionButton.IsEnabled = false;
+        ExtensionHostStatus.Text = "Démarrage de l’hôte Node.js…";
+        try
+        {
+            _extensionHost ??= new ExtensionHostService();
+            await _extensionHost.StartAsync(QueueExtensionHostMessage);
+            ExtensionHostStatus.Text = $"Activation de {extension.Id}…";
+            var result = await _extensionHost.ActivateAsync(extension, _workspace?.RootPath);
+            if (result.Type == "activationFailed")
+            {
+                ExtensionHostStatus.Text = $"Échec d’activation : {extension.Id}";
+                OutputPanel.AppendText($"[Extension Host] {extension.Id} : {result.Error}{Environment.NewLine}");
+                return;
+            }
+            _activeExtensionIds.Add(extension.Id);
+            AddContributedCommands(extension);
+            RefreshInstalledExtensions();
+            RefreshExtensionCommands();
+            ExtensionHostStatus.Text = $"{_activeExtensionIds.Count} extension(s) active(s) · processus Node.js séparé";
+            StatusMessage.Text = $"Extension activée : {extension.Id}";
+        }
+        catch (Exception ex)
+        {
+            ExtensionHostStatus.Text = "Impossible de démarrer l’hôte d’extensions : " + ex.Message;
+            OutputPanel.AppendText("[Extension Host] " + ex + Environment.NewLine);
+        }
+        finally { ActivateExtensionButton.IsEnabled = true; }
+    }
+
+    private void AddContributedCommands(InstalledExtension extension)
+    {
+        try
+        {
+            var manifestPath = Path.Combine(extension.Path, "extension", "package.json");
+            using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            if (!manifest.RootElement.TryGetProperty("contributes", out var contributes) ||
+                !contributes.TryGetProperty("commands", out var commands) || commands.ValueKind != JsonValueKind.Array) return;
+            foreach (var item in commands.EnumerateArray())
+            {
+                if (!item.TryGetProperty("command", out var idValue) || idValue.ValueKind != JsonValueKind.String) continue;
+                var command = idValue.GetString();
+                if (string.IsNullOrWhiteSpace(command)) continue;
+                var title = item.TryGetProperty("title", out var titleValue) && titleValue.ValueKind == JsonValueKind.String
+                    ? titleValue.GetString() ?? command : command;
+                var description = item.TryGetProperty("category", out var categoryValue) && categoryValue.ValueKind == JsonValueKind.String
+                    ? categoryValue.GetString() ?? string.Empty : string.Empty;
+                _extensionCommands[(extension.Id, command)] = (title, description);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            OutputPanel.AppendText($"[Extension Host] Impossible de lire les commandes de {extension.Id} : {ex.Message}{Environment.NewLine}");
+        }
+    }
+
+    private void QueueExtensionHostMessage(ExtensionHostMessage message)
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+        _ = Dispatcher.InvokeAsync(() => HandleExtensionHostMessage(message));
+    }
+
+    private void HandleExtensionHostMessage(ExtensionHostMessage message)
+    {
+        switch (message.Type)
+        {
+            case "commandRegistered":
+                if (message.ExtensionId is { } extensionId && message.Command is { } command &&
+                    !_extensionCommands.ContainsKey((extensionId, command)))
+                    _extensionCommands[(extensionId, command)] = (command, string.Empty);
+                RefreshExtensionCommands();
+                break;
+            case "notification":
+                StatusMessage.Text = $"[{message.ExtensionId ?? "Extension"}] {message.Message}";
+                break;
+            case "activationFailed":
+                if (message.Error is not null) OutputPanel.AppendText($"[Extension Host] {message.ExtensionId} : {message.Error}{Environment.NewLine}");
+                break;
+            case "commandFailed":
+                OutputPanel.AppendText($"[Extension Host] {message.ExtensionId}/{message.Command} : {message.Error}{Environment.NewLine}");
+                StatusMessage.Text = $"La commande d’extension a échoué · {message.Command}";
+                break;
+            case "commandCompleted":
+                StatusMessage.Text = "Commande d’extension exécutée.";
+                break;
+            case "hostError":
+                OutputPanel.AppendText("[Extension Host] " + message.Error + Environment.NewLine);
+                break;
+        }
+    }
+
+    private void RefreshExtensionCommands()
+    {
+        ExtensionCommands.Items.Clear();
+        foreach (var item in _extensionCommands.OrderBy(pair => pair.Key.ExtensionId, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(pair => pair.Value.Title, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!_activeExtensionIds.Contains(item.Key.ExtensionId)) continue;
+            var label = string.IsNullOrWhiteSpace(item.Value.Description)
+                ? $"{item.Value.Title}  ·  {item.Key.ExtensionId}"
+                : $"{item.Value.Description}: {item.Value.Title}  ·  {item.Key.ExtensionId}";
+            ExtensionCommands.Items.Add(new ListBoxItem { Content = label, Tag = item.Key, ToolTip = item.Key.Command });
+        }
+    }
+
+    private async void RunExtensionCommand_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (ExtensionCommands.SelectedItem is not ListBoxItem { Tag: ValueTuple<string, string> command }) return;
+        await InvokeExtensionCommandAsync(command.Item1, command.Item2);
+    }
+
+    private async Task InvokeExtensionCommandAsync(string extensionId, string command)
+    {
+        try
+        {
+            if (_extensionHost is null) return;
+            await _extensionHost.InvokeCommandAsync(extensionId, command);
+        }
+        catch (Exception ex)
+        {
+            OutputPanel.AppendText("[Extension Host] " + ex + Environment.NewLine);
+            StatusMessage.Text = "Commande d’extension impossible · consulte Sortie";
+        }
     }
 
     private async void InstallVsix_Click(object sender, RoutedEventArgs e)

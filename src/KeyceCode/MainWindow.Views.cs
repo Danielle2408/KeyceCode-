@@ -137,8 +137,16 @@ public partial class MainWindow
             ("KeyceIA: Ouvrir l’assistant", () => ToggleAssistant_Click(sender, new RoutedEventArgs())),
             ("Préférences: Thème de couleurs", () => Theme_Click(sender, new RoutedEventArgs()))
         ];
-        var selected = QuickPickWindow.Show(this, "Palette de commandes", commands.Select(c => c.Name));
-        if (selected is not null) commands.First(c => c.Name == selected).Action();
+        var extensionCommands = _extensionCommands
+            .Where(pair => _activeExtensionIds.Contains(pair.Key.ExtensionId))
+            .ToDictionary(pair => $"Extension: {pair.Value.Title} · {pair.Key.ExtensionId}", pair => pair.Key, StringComparer.OrdinalIgnoreCase);
+        var choices = commands.Select(command => command.Name).Concat(extensionCommands.Keys).ToArray();
+        var selected = QuickPickWindow.Show(this, "Palette de commandes", choices);
+        if (selected is null) return;
+        var builtIn = commands.FirstOrDefault(command => command.Name == selected);
+        if (builtIn.Action is not null) { builtIn.Action(); return; }
+        if (extensionCommands.TryGetValue(selected, out var extensionCommand))
+            _ = InvokeExtensionCommandAsync(extensionCommand.ExtensionId, extensionCommand.Command);
     }
 
     private async void QuickOpen_Click(object sender, RoutedEventArgs e)

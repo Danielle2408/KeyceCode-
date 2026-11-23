@@ -455,13 +455,6 @@ public partial class MainWindow
 
     private async Task<bool> SaveDocumentAsync(EditorDocument document)
     {
-        if (document.HasExternalConflict)
-        {
-            var overwrite = MessageBox.Show(this,
-                $"{document.Name} a changé ou a été supprimé sur le disque depuis son ouverture. Écraser ou recréer le fichier avec le contenu de l’éditeur ?",
-                "Confirmer l’enregistrement", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (overwrite != MessageBoxResult.Yes) return false;
-        }
         if (string.IsNullOrWhiteSpace(document.Path))
         {
             var dialog = new SaveFileDialog { FileName = document.Name, Filter = "Tous les fichiers|*.*" };
@@ -478,7 +471,6 @@ public partial class MainWindow
             if (_workspace is not null && IsInsideWorkspace(document.Path, _workspace.RootPath))
                 await _workspace.WriteFileAsync(document.Path, text, GetTextEncoding(document.EncodingId));
             else await File.WriteAllTextAsync(document.Path, text, GetTextEncoding(document.EncodingId));
-            document.HasExternalConflict = false;
             await EnsureLspDocumentAsync(document);
             if (_languageServer is not null && _lspDocumentUris.TryGetValue(document.Id, out var lspUri))
                 await _languageServer.SaveDocumentAsync(lspUri, document.Text);
@@ -487,43 +479,6 @@ public partial class MainWindow
             return true;
         }
         catch (Exception ex) { ShowError(ex); return false; }
-    }
-
-    private async void ReloadActiveFile_Click(object sender, RoutedEventArgs e)
-    {
-        var document = _activeDocument;
-        if (document is null || string.IsNullOrWhiteSpace(document.Path))
-        {
-            StatusMessage.Text = "Aucun fichier actif à recharger.";
-            return;
-        }
-        if (!File.Exists(document.Path))
-        {
-            StatusMessage.Text = $"Le fichier n’existe plus sur le disque : {document.Path}";
-            return;
-        }
-        if (MessageBox.Show(this,
-                $"Remplacer le contenu actuel de {document.Name} par sa version sur disque ?",
-                "Recharger le fichier", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
-            return;
-        try
-        {
-            var (text, encoding) = await ReadTextFileAsync(document.Path);
-            document.Text = text;
-            document.EncodingId = encoding;
-            document.LineEnding = text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n"
-                : text.Contains('\r') ? "\r" : "\n";
-            document.IsDirty = false;
-            document.HasExternalConflict = false;
-            RefreshTabs();
-            await SendDocumentAsync(document, replaceEditorText: true);
-            UpdateFileStatus(document);
-            StatusMessage.Text = $"Rechargé depuis le disque : {document.Name}";
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-        {
-            StatusMessage.Text = "Impossible de recharger le fichier : " + ex.Message;
-        }
     }
 
     private async Task<string?> FormatDocumentBeforeSaveAsync(EditorDocument document)

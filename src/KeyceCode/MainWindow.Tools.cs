@@ -574,6 +574,32 @@ public partial class MainWindow
         catch (Exception ex) { StatusMessage.Text = "Aucun dépôt GitHub associé · " + ex.Message; }
     }
 
+    private async void ValidateGitHubLink_Click(object sender, RoutedEventArgs e)
+    {
+        if (_workspace is null) { StatusMessage.Text = "Ouvre un dossier avant de valider le lien GitHub."; return; }
+        try
+        {
+            var remote = (await RunGitAsync("remote", "get-url", "origin")).Trim();
+            if (!TryParseGitHubRemote(remote, out _, out var webUrl))
+            {
+                StatusMessage.Text = "Aucun remote GitHub valide n’est configuré dans origin.";
+                return;
+            }
+
+            // No --exit-code: an empty remote has no refs yet but is still a valid reachable repository.
+            await RunGitAsync("ls-remote", "--heads", "origin");
+            GitBranchLabel.Text = "GitHub lié : " + webUrl.Host + webUrl.AbsolutePath;
+            StatusMessage.Text = "Lien GitHub validé : le dépôt distant est accessible.";
+            OutputPanel.AppendText($"[GitHub] Lien validé : {webUrl.AbsoluteUri}{Environment.NewLine}");
+        }
+        catch (Exception ex)
+        {
+            GitBranchLabel.Text = "Lien GitHub non vérifié";
+            StatusMessage.Text = "Le dépôt GitHub est inaccessible · vérifie l’URL ou la connexion Git.";
+            OutputPanel.AppendText("[GitHub] Validation du lien impossible : " + ex.Message + Environment.NewLine);
+        }
+    }
+
     private static bool TryParseGitHubRemote(string value, out string remoteUrl, out Uri webUrl)
     {
         remoteUrl = string.Empty;

@@ -72,6 +72,12 @@ public partial class MainWindow : Window
         _autoSaveTimer.Stop();
         await StopDebugSessionAsync(terminateDebuggee: true);
         await StopTerminalSessionAsync();
+        if (_extensionHost is not null)
+        {
+            try { await _extensionHost.DisposeAsync(); }
+            catch (Exception ex) { OutputPanel.AppendText("[Extension Host] Arrêt : " + ex.Message + Environment.NewLine); }
+            _extensionHost = null;
+        }
         foreach (var request in _geminiInlineRequests.Values) request.Cancel();
         _geminiInlineRequests.Clear();
         foreach (var edit in _pendingAiEdits.Values) edit.TrySetResult(false);
@@ -1006,7 +1012,6 @@ public partial class MainWindow : Window
         public string LineEnding { get; set; } = Environment.NewLine;
         public string Name => Alias ?? System.IO.Path.GetFileName(Path);
         public bool IsDirty { get; set; }
-        public bool HasExternalConflict { get; set; }
         public bool IsPreview { get; set; }
     }
 

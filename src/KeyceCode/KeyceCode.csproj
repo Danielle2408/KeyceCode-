@@ -14,5 +14,8 @@
     <Content Include="WebEditor\dist\**\*" Condition="Exists('WebEditor\dist')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="ExtensionHost\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 </Project>
