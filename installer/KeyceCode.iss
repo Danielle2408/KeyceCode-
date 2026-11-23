@@ -8,18 +8,18 @@
 [Setup]
 AppId={{A31F56C4-7DC6-46A3-889C-7354A2B1E806}
 AppName=KeyceCode
-AppVersion=0.1.0
+AppVersion=0.2.0
 AppPublisher=KeyceCode
 DefaultDirName={localappdata}\Programs\KeyceCode
 DefaultGroupName=KeyceCode
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-OutputBaseFilename=KeyceCode-Setup-0.1.0
+OutputBaseFilename=KeyceCode-Setup-0.2.0
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\KeyceCode.exe
 SetupLogging=yes
 

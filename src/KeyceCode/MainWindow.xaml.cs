@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, CancellationTokenSource> _geminiInlineRequests = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (int Version, int Offset)> _editorSnapshots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TaskCompletionSource<string?>> _pendingFormatOnSave = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TaskCompletionSource<bool>> _pendingAiEdits = new(StringComparer.Ordinal);
     private LanguageServerHost? _languageServer;
     private WorkspaceService? _workspace;
     private IReadOnlyList<string> _recentWorkspaces = [];
@@ -73,6 +74,8 @@ public partial class MainWindow : Window
         await StopTerminalSessionAsync();
         foreach (var request in _geminiInlineRequests.Values) request.Cancel();
         _geminiInlineRequests.Clear();
+        foreach (var edit in _pendingAiEdits.Values) edit.TrySetResult(false);
+        _pendingAiEdits.Clear();
         _gemini.Dispose();
         if (_languageServer is not null)
         {
@@ -717,6 +720,12 @@ public partial class MainWindow : Window
             }
             else if (type == "geminiInlineCompletionRequest") await HandleGeminiInlineCompletionRequestAsync(root);
             else if (type == "geminiInlineCompletionCancel") CancelInlineRequest(ReadString(root, "requestId"));
+            else if (type == "replaceDocumentTextResult")
+            {
+                var requestId = ReadString(root, "requestId");
+                if (requestId is not null && _pendingAiEdits.TryGetValue(requestId, out var completion))
+                    completion.TrySetResult(ReadBool(root, "success") == true);
+            }
             else if (type == "cursorChanged")
             {
                 StatusCursor.Content = $"Ln {ReadInt(root, "line", 1)}, Col {ReadInt(root, "column", 1)}";
@@ -903,6 +912,25 @@ public partial class MainWindow : Window
         if (!_webReady || CodeEditor.CoreWebView2 is null) return;
         CodeEditor.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message));
         await Task.CompletedTask;
+    }
+
+    private async Task<bool> ApplyAiEditToEditorAsync(EditorDocument document, AiEditProposal proposal)
+    {
+        if (!_webReady || CodeEditor.CoreWebView2 is null) return false;
+        var requestId = Guid.NewGuid().ToString("N");
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingAiEdits[requestId] = completion;
+        try
+        {
+            await PostEditorMessageAsync(new
+            {
+                type = "replaceDocumentText", requestId, id = document.Id, text = proposal.ProposedText,
+                kind = proposal.Kind, offset = proposal.Offset, expectedText = proposal.OriginalText
+            });
+            return await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TimeoutException) { return false; }
+        finally { _pendingAiEdits.Remove(requestId); }
     }
 
     private async Task SendDocumentAsync(EditorDocument document, bool replaceEditorText = false)

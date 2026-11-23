@@ -393,6 +393,11 @@
         freeInlineCompletions() {}
       }
     );
+    monaco.editor.addKeybindingRule({
+      keybinding: monaco.KeyCode.Tab,
+      command: "editor.action.inlineSuggest.commit",
+      when: "editorTextFocus && inlineSuggestionVisible && !editorTabMovesFocus"
+    });
 
     loading.classList.add("ready");
     post({ type: "ready", capabilities: ["monaco", "models", "multicursor", "format-request", "theme", "options"] });
@@ -841,6 +846,38 @@
           editor.executeEdits("keyceia", [{ range: editor.getSelection(), text: message.text, forceMoveMarkers: true }]);
           editor.pushUndoStop();
           editor.focus();
+          break;
+        }
+        case "replaceDocumentText": {
+          const entry = [...modelIdsByUri.entries()].find(([, id]) => id === message.id);
+          const model = entry ? models.get(entry[0]) : null;
+          if (!editor || !model || model.isDisposed() || typeof message.text !== "string" ||
+              typeof message.expectedText !== "string" || model.getValue() !== message.expectedText) {
+            post({ type: "replaceDocumentTextResult", requestId: message.requestId, success: false });
+            post({ type: "editorError", message: "Le fichier a changé depuis la proposition KeyceIA ; aucune modification n’a été appliquée." });
+            break;
+          }
+          const targetEditor = [editor, primaryEditor, secondaryEditor].find((candidate) => candidate?.getModel() === model);
+          if (!targetEditor) {
+            post({ type: "replaceDocumentTextResult", requestId: message.requestId, success: false });
+            break;
+          }
+          const priorSuppression = suppressChanges;
+          suppressChanges = true;
+          try {
+            targetEditor.pushUndoStop();
+            const range = message.kind === "completion" && Number.isInteger(message.offset)
+              ? (() => {
+                const position = model.getPositionAt(Math.max(0, Math.min(message.offset, model.getValueLength())));
+                return new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column);
+              })()
+              : model.getFullModelRange();
+            targetEditor.executeEdits("keyceia", [{ range, text: message.text, forceMoveMarkers: true }]);
+            targetEditor.pushUndoStop();
+          } finally { suppressChanges = priorSuppression; }
+          notifyContentChanged(targetEditor);
+          targetEditor.focus();
+          post({ type: "replaceDocumentTextResult", requestId: message.requestId, success: true });
           break;
         }
         case "focus": editor?.focus(); break;

@@ -69,6 +69,22 @@ public sealed class GeminiService : IDisposable
             cancellationToken, preserveWhitespace: true);
     }
 
+    /// <summary>Asks Gemini for a complete replacement document, suitable for review before applying.</summary>
+    public Task<string> EditDocumentAsync(string instruction, string source, string? language = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(instruction))
+            throw new ArgumentException("La consigne de modification ne peut pas être vide.", nameof(instruction));
+        ArgumentNullException.ThrowIfNull(source);
+        var languageHint = string.IsNullOrWhiteSpace(language) ? "texte brut" : language.Trim();
+        return GenerateAsync(
+            "Tu es KeyceIA, un assistant de programmation. Modifie le document selon la consigne. " +
+            "Réponds uniquement par le document complet modifié, sans bloc Markdown, sans préambule et sans explication. " +
+            "Conserve le comportement et le style existants sauf si la consigne demande de les changer.\n" +
+            $"Langage : {languageHint}.\nConsigne :\n{instruction.Trim()}\n\nDocument actuel :\n{source}",
+            cancellationToken, preserveWhitespace: true);
+    }
+
     private async Task<string> GenerateAsync(string prompt, CancellationToken cancellationToken, bool preserveWhitespace = false)
     {
         var apiKey = _explicitApiKey ?? _credentialStore.Read() ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY");

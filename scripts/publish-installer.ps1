@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $publishDir = Join-Path $repoRoot 'artifacts\publish'
 $installerDeps = Join-Path $repoRoot 'artifacts\installer-deps'
-$setupOutput = Join-Path ([Environment]::GetFolderPath('Desktop')) 'KeyceCode-Setup-0.1.0.exe'
+$setupOutput = Join-Path ([Environment]::GetFolderPath('Desktop')) 'KeyceCode-Setup-0.2.0.exe'
 $webViewBootstrapper = Join-Path $installerDeps 'MicrosoftEdgeWebView2Setup.exe'
 $installerCompiler = Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'
 
