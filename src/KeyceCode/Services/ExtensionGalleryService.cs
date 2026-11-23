@@ -20,11 +20,13 @@ public sealed record GalleryExtension(
     public override string ToString() => $"{DisplayName}  ·  {Namespace}.{Name}  ·  {DownloadCount:N0} téléchargements";
 }
 
+public sealed record ExtensionDownloadProgress(string Phase, long BytesReceived, long? TotalBytes);
+
 /// <summary>Queries Open VSX and downloads VSIX packages without executing them.</summary>
 public sealed class ExtensionGalleryService : IDisposable
 {
     private static readonly Uri RegistryRoot = new("https://open-vsx.org/");
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(45) };
+    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(15) };
     private const long MaximumPackageBytes = 100L * 1024 * 1024;
 
     public async Task<IReadOnlyList<GalleryExtension>> SearchAsync(string query, CancellationToken cancellationToken = default)
@@ -61,9 +63,11 @@ public sealed class ExtensionGalleryService : IDisposable
         return results;
     }
 
-    public async Task<string> DownloadAsync(GalleryExtension extension, CancellationToken cancellationToken = default)
+    public async Task<string> DownloadAsync(GalleryExtension extension, IProgress<ExtensionDownloadProgress>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(extension);
+        progress?.Report(new("Recherche du paquet Windows…", 0, null));
         var targetPlatform = RuntimeInformation.ProcessArchitecture switch
         {
             Architecture.X64 => "win32-x64",
@@ -71,14 +75,30 @@ public sealed class ExtensionGalleryService : IDisposable
             Architecture.X86 => "win32-ia32",
             _ => throw new PlatformNotSupportedException("Cette architecture Windows n’est pas prise en charge par l’installation de VSIX.")
         };
-        var metadataUri = new Uri(RegistryRoot,
-            $"api/{Uri.EscapeDataString(extension.Namespace)}/{Uri.EscapeDataString(extension.Name)}/{targetPlatform}/{Uri.EscapeDataString(extension.Version)}");
-        using var metadataResponse = await _http.GetAsync(metadataUri, cancellationToken);
-        metadataResponse.EnsureSuccessStatusCode();
-        using var metadata = await JsonDocument.ParseAsync(await metadataResponse.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
-        if (!metadata.RootElement.TryGetProperty("files", out var files) || !TryRegistryUri(ReadString(files, "download"), out var downloadUri))
-            throw new InvalidOperationException("Aucun paquet VSIX Windows n’est disponible pour cette extension.");
-        var publishedPlatform = ReadString(metadata.RootElement, "targetPlatform");
+        JsonDocument? metadata = null;
+        string? publishedPlatform = null;
+        Uri? downloadUri = null;
+        foreach (var platform in new[] { targetPlatform, "universal" }.Distinct(StringComparer.Ordinal))
+        {
+            var metadataUri = new Uri(RegistryRoot,
+                $"api/{Uri.EscapeDataString(extension.Namespace)}/{Uri.EscapeDataString(extension.Name)}/{platform}/{Uri.EscapeDataString(extension.Version)}");
+            using var metadataResponse = await _http.GetAsync(metadataUri, cancellationToken);
+            if (metadataResponse.StatusCode == System.Net.HttpStatusCode.NotFound) continue;
+            metadataResponse.EnsureSuccessStatusCode();
+            var candidate = await JsonDocument.ParseAsync(await metadataResponse.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
+            if (candidate.RootElement.TryGetProperty("files", out var files) && TryDownloadUri(ReadString(files, "download"), out var candidateUri))
+            {
+                metadata = candidate;
+                downloadUri = candidateUri;
+                publishedPlatform = ReadString(candidate.RootElement, "targetPlatform");
+                break;
+            }
+            candidate.Dispose();
+        }
+        using (metadata)
+        {
+        if (metadata is null || downloadUri is null)
+            throw new InvalidOperationException("Open VSX ne propose pas de paquet VSIX pour Windows ou une version universelle de cette extension.");
         if (publishedPlatform is not ("win32-x64" or "win32-arm64" or "win32-ia32" or "universal"))
             throw new InvalidOperationException($"Cette version est publiée pour {publishedPlatform ?? "une autre plateforme"}, pas pour {targetPlatform}.");
         if (!downloadUri.AbsolutePath.EndsWith(".vsix", StringComparison.OrdinalIgnoreCase))
@@ -86,10 +106,12 @@ public sealed class ExtensionGalleryService : IDisposable
 
         using var response = await _http.GetAsync(downloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
-        if (response.RequestMessage?.RequestUri is not { } finalUri || !IsRegistryUri(finalUri))
-            throw new InvalidOperationException("Le téléchargement a quitté le domaine Open VSX attendu.");
+        if (response.RequestMessage?.RequestUri is not { } finalUri || !IsAllowedDownloadUri(finalUri))
+            throw new InvalidOperationException("Le téléchargement a été redirigé vers un domaine non autorisé.");
         if (response.Content.Headers.ContentLength is > MaximumPackageBytes)
             throw new InvalidDataException("Le paquet dépasse la limite de téléchargement de 100 Mo.");
+        var totalBytes = response.Content.Headers.ContentLength;
+        progress?.Report(new("Téléchargement du VSIX…", 0, totalBytes));
 
         var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KeyceCode", "extensions", "downloads");
         Directory.CreateDirectory(directory);
@@ -104,14 +126,21 @@ public sealed class ExtensionGalleryService : IDisposable
             {
                 var buffer = new byte[81920];
                 long written = 0;
+                var lastProgress = Environment.TickCount64;
                 int read;
                 while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
                 {
                     written += read;
                     if (written > MaximumPackageBytes) throw new InvalidDataException("Le paquet dépasse la limite de téléchargement de 100 Mo.");
                     await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    if (Environment.TickCount64 - lastProgress >= 100 || written == totalBytes)
+                    {
+                        progress?.Report(new("Téléchargement du VSIX…", written, totalBytes));
+                        lastProgress = Environment.TickCount64;
+                    }
                 }
             }
+            progress?.Report(new("VSIX téléchargé · vérification…", totalBytes ?? 0, totalBytes));
             File.Move(temporary, destination, overwrite: true);
             return destination;
         }
@@ -120,12 +149,18 @@ public sealed class ExtensionGalleryService : IDisposable
             try { File.Delete(temporary); } catch (IOException) { }
             throw;
         }
+        }
     }
 
     private static bool TryRegistryUri(string? value, out Uri uri) =>
         Uri.TryCreate(value, UriKind.Absolute, out uri!) && IsRegistryUri(uri);
+    private static bool TryDownloadUri(string? value, out Uri uri) =>
+        Uri.TryCreate(value, UriKind.Absolute, out uri!) && IsAllowedDownloadUri(uri);
     private static bool IsRegistryUri(Uri uri) => uri.Scheme == Uri.UriSchemeHttps &&
         uri.Host.Equals(RegistryRoot.Host, StringComparison.OrdinalIgnoreCase);
+    private static bool IsAllowedDownloadUri(Uri uri) => uri.Scheme == Uri.UriSchemeHttps &&
+        (uri.Host.Equals(RegistryRoot.Host, StringComparison.OrdinalIgnoreCase) ||
+         uri.Host.Equals("openvsx.eclipsecontent.org", StringComparison.OrdinalIgnoreCase));
     private static string? ReadString(JsonElement value, string property) =>
         value.ValueKind == JsonValueKind.Object && value.TryGetProperty(property, out var result) && result.ValueKind == JsonValueKind.String ? result.GetString() : null;
     private static long ReadInt64(JsonElement value, string property) =>

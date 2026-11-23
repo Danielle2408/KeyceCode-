@@ -15,6 +15,7 @@ public partial class MainWindow
     private readonly HashSet<string> _activeExtensionIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(string ExtensionId, string Command), (string Title, string Description)> _extensionCommands = [];
     private ExtensionHostService? _extensionHost;
+    private CancellationTokenSource? _extensionOperationCancellation;
 
     private void InitializeExtensionList() => RefreshInstalledExtensions();
 
@@ -205,27 +206,33 @@ public partial class MainWindow
         if (ExtensionResults.SelectedItem is not GalleryExtension extension) return;
         InstallGalleryExtensionButton.IsEnabled = false;
         DownloadExtensionButton.IsEnabled = false;
-        ExtensionGalleryStatus.Text = $"Téléchargement de {extension.Identity}…";
+        BeginExtensionDownloadProgress();
         string? packagePath = null;
         try
         {
-            packagePath = await _extensionGallery.DownloadAsync(extension);
+            var progress = CreateExtensionDownloadProgress();
+            packagePath = await _extensionGallery.DownloadAsync(extension, progress, _extensionOperationCancellation!.Token);
             ExtensionGalleryStatus.Text = "VSIX téléchargé. Vérification et installation…";
-            var installed = await _vsixExtensions.InstallAsync(packagePath);
+            var installed = await _vsixExtensions.InstallAsync(packagePath, _extensionOperationCancellation!.Token, CreateVsixInstallProgress());
             RefreshInstalledExtensions();
             ExtensionGalleryStatus.Text = $"{installed.Id}@{installed.Version} installé localement. Son code reste inactif dans KeyceCode.";
             ExtensionDetails.Text += $"\n\nInstallé dans : {installed.Path}";
             StatusMessage.Text = $"Extension téléchargée et installée (inactive) : {installed.Id}";
         }
+        catch (OperationCanceledException)
+        {
+            ExtensionGalleryStatus.Text = "Téléchargement ou installation annulé.";
+        }
         catch (Exception ex)
         {
-            ExtensionGalleryStatus.Text = "Téléchargement ou installation impossible.";
+            ExtensionGalleryStatus.Text = "Échec : " + ex.Message;
             ExtensionDetails.Text += "\n\n" + ex.Message;
+            OutputPanel.AppendText("[Extensions] " + ex + Environment.NewLine);
         }
         finally
         {
-            InstallGalleryExtensionButton.IsEnabled = ExtensionResults.SelectedItem is GalleryExtension;
-            DownloadExtensionButton.IsEnabled = ExtensionResults.SelectedItem is GalleryExtension;
+            EndExtensionDownloadProgress();
+            UpdateGallerySelectionButtons();
             if (packagePath is not null) ExtensionDetails.Text += $"\nPaquet : {packagePath}";
         }
     }
@@ -299,34 +306,116 @@ public partial class MainWindow
     {
         if (ExtensionResults.SelectedItem is not GalleryExtension extension)
         {
-            InstallGalleryExtensionButton.IsEnabled = false;
-            DownloadExtensionButton.IsEnabled = false;
+            UpdateGallerySelectionButtons();
             return;
         }
         var verification = extension.Verified ? "Éditeur vérifié par Open VSX" : "Éditeur non vérifié";
         var rating = extension.Rating is { } value ? $" · note {value:0.0}/5" : string.Empty;
         ExtensionDetails.Text = $"{extension.DisplayName}\n{extension.Identity}\n{verification}{rating}\n{extension.Description}";
+        UpdateGallerySelectionButtons();
+    }
+
+    private void UpdateGallerySelectionButtons()
+    {
+        if (ExtensionResults.SelectedItem is not GalleryExtension extension)
+        {
+            InstallGalleryExtensionButton.Content = "Télécharger et installer depuis Open VSX";
+            InstallGalleryExtensionButton.IsEnabled = false;
+            DownloadExtensionButton.IsEnabled = false;
+            return;
+        }
+        var alreadyInstalled = _vsixExtensions.GetInstalled().Any(installed =>
+            installed.Id.Equals($"{extension.Namespace}.{extension.Name}", StringComparison.OrdinalIgnoreCase) &&
+            installed.Version.Equals(extension.Version, StringComparison.OrdinalIgnoreCase));
+        InstallGalleryExtensionButton.Content = alreadyInstalled ? "Déjà installée" : "Télécharger et installer depuis Open VSX";
+        InstallGalleryExtensionButton.IsEnabled = !alreadyInstalled;
         DownloadExtensionButton.IsEnabled = true;
-        InstallGalleryExtensionButton.IsEnabled = true;
     }
 
     private async void DownloadExtension_Click(object sender, RoutedEventArgs e)
     {
         if (ExtensionResults.SelectedItem is not GalleryExtension extension) return;
         DownloadExtensionButton.IsEnabled = false;
-        ExtensionGalleryStatus.Text = $"Téléchargement de {extension.Identity}…";
+        BeginExtensionDownloadProgress();
         try
         {
-            var path = await _extensionGallery.DownloadAsync(extension);
+            var path = await _extensionGallery.DownloadAsync(extension, CreateExtensionDownloadProgress(), _extensionOperationCancellation!.Token);
             ExtensionGalleryStatus.Text = "Paquet VSIX téléchargé. KeyceCode ne l’a pas installé ni exécuté.";
             ExtensionDetails.Text += $"\n\nFichier : {path}";
             StatusMessage.Text = $"VSIX téléchargé : {extension.Name}";
         }
+        catch (OperationCanceledException) { ExtensionGalleryStatus.Text = "Téléchargement annulé."; }
         catch (Exception ex)
         {
-            ExtensionGalleryStatus.Text = "Échec du téléchargement.";
+            ExtensionGalleryStatus.Text = "Échec du téléchargement : " + ex.Message;
             ExtensionDetails.Text += "\n\n" + ex.Message;
+            OutputPanel.AppendText("[Extensions] " + ex + Environment.NewLine);
         }
-        finally { DownloadExtensionButton.IsEnabled = ExtensionResults.SelectedItem is GalleryExtension; }
+        finally
+        {
+            EndExtensionDownloadProgress();
+            UpdateGallerySelectionButtons();
+        }
+    }
+
+    private void BeginExtensionDownloadProgress()
+    {
+        _extensionOperationCancellation?.Cancel();
+        _extensionOperationCancellation?.Dispose();
+        _extensionOperationCancellation = new CancellationTokenSource(TimeSpan.FromMinutes(15));
+        ExtensionDownloadProgress.Value = 0;
+        ExtensionDownloadProgress.IsIndeterminate = true;
+        ExtensionDownloadProgress.Visibility = Visibility.Visible;
+        CancelExtensionOperationButton.Visibility = Visibility.Visible;
+        ExtensionGalleryStatus.Text = "Préparation du téléchargement…";
+    }
+
+    private IProgress<ExtensionDownloadProgress> CreateExtensionDownloadProgress() => new Progress<ExtensionDownloadProgress>(progress =>
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+        ExtensionDownloadProgress.IsIndeterminate = progress.TotalBytes is not > 0;
+        if (progress.TotalBytes is > 0)
+        {
+            ExtensionDownloadProgress.Value = Math.Clamp(progress.BytesReceived * 100d / progress.TotalBytes.Value, 0, 100);
+            ExtensionGalleryStatus.Text = $"{progress.Phase} {FormatExtensionBytes(progress.BytesReceived)} / {FormatExtensionBytes(progress.TotalBytes.Value)}";
+        }
+        else
+        {
+            ExtensionGalleryStatus.Text = progress.BytesReceived > 0
+                ? $"{progress.Phase} {FormatExtensionBytes(progress.BytesReceived)}"
+                : progress.Phase;
+        }
+    });
+
+    private IProgress<VsixInstallProgress> CreateVsixInstallProgress() => new Progress<VsixInstallProgress>(progress =>
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+        ExtensionDownloadProgress.IsIndeterminate = progress.TotalBytes <= 0;
+        if (progress.TotalBytes > 0)
+        {
+            ExtensionDownloadProgress.Value = Math.Clamp(progress.BytesProcessed * 100d / progress.TotalBytes, 0, 100);
+            ExtensionGalleryStatus.Text = $"{progress.Phase} {FormatExtensionBytes(progress.BytesProcessed)} / {FormatExtensionBytes(progress.TotalBytes)}";
+        }
+        else ExtensionGalleryStatus.Text = progress.Phase;
+    });
+
+    private static string FormatExtensionBytes(long bytes) => bytes < 1024 * 1024
+        ? $"{bytes / 1024d:0} Ko" : $"{bytes / (1024d * 1024d):0.0} Mo";
+
+    private void CancelExtensionOperation_Click(object sender, RoutedEventArgs e)
+    {
+        _extensionOperationCancellation?.Cancel();
+        ExtensionGalleryStatus.Text = "Annulation en cours…";
+        CancelExtensionOperationButton.IsEnabled = false;
+    }
+
+    private void EndExtensionDownloadProgress()
+    {
+        _extensionOperationCancellation?.Dispose();
+        _extensionOperationCancellation = null;
+        ExtensionDownloadProgress.IsIndeterminate = false;
+        ExtensionDownloadProgress.Visibility = Visibility.Collapsed;
+        CancelExtensionOperationButton.Visibility = Visibility.Collapsed;
+        CancelExtensionOperationButton.IsEnabled = true;
     }
 }

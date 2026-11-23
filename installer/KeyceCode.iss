@@ -10,6 +10,7 @@ AppId={{A31F56C4-7DC6-46A3-889C-7354A2B1E806}
 AppName=KeyceCode
 AppVersion=0.2.0
 AppPublisher=KeyceCode
+SetupIconFile=..\src\KeyceCode\Assets\KeyceCode.ico
 DefaultDirName={localappdata}\Programs\KeyceCode
 DefaultGroupName=KeyceCode
 DisableProgramGroupPage=yes

@@ -7,9 +7,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>KeyceCode</AssemblyName>
     <RootNamespace>KeyceCode</RootNamespace>
+    <ApplicationIcon>Assets\KeyceCode.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets\KeyceCode.png" />
+    <Resource Include="Assets\KeyceCode.ico" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4022.49" />
     <Content Include="WebEditor\dist\**\*" Condition="Exists('WebEditor\dist')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

@@ -54,6 +54,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         InitializeExtensionList();
         _editorPreferences = _preferencesService.Load();
+        UpdateGeminiInlineCompletionPauseButton();
         FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
         _autoSaveTimer.Tick += AutoSaveTimer_Tick;
         OutputPanel.Text = "KeyceCode output\r\n";
@@ -70,6 +71,8 @@ public partial class MainWindow : Window
     private async void MainWindow_Closed(object? sender, EventArgs e)
     {
         _autoSaveTimer.Stop();
+        _geminiInlineCompletionPauseTimer?.Stop();
+        _terminalAiAnalysisCancellation?.Cancel();
         await StopDebugSessionAsync(terminateDebuggee: true);
         await StopTerminalSessionAsync();
         if (_extensionHost is not null)
@@ -838,7 +841,7 @@ public partial class MainWindow : Window
         var language = ReadString(message, "language") ?? "plaintext";
         var document = _activeDocument;
         if (string.IsNullOrWhiteSpace(requestId) || string.IsNullOrWhiteSpace(documentId) || prefix is null ||
-            !_editorPreferences.GeminiInlineCompletionEnabled || document is null || document.Id != documentId ||
+            !IsGeminiInlineCompletionAvailable || document is null || document.Id != documentId ||
             ReadBool(message, "selectionEmpty") != true || !string.IsNullOrEmpty(_selectedText) ||
             offset < 0 || offset > document.Text.Length || prefix.Length > 4000)
         {
@@ -862,7 +865,7 @@ public partial class MainWindow : Window
         try
         {
             var completion = await _gemini.CompleteAsync(prefix, language, cancellation.Token);
-            if (cancellation.IsCancellationRequested || !_editorPreferences.GeminiInlineCompletionEnabled ||
+            if (cancellation.IsCancellationRequested || !IsGeminiInlineCompletionAvailable ||
                 !ReferenceEquals(document, _activeDocument) ||
                 !_editorSnapshots.TryGetValue(documentId, out var latest) || latest.Version != version || latest.Offset != offset)
                 return;
@@ -984,7 +987,8 @@ public partial class MainWindow : Window
                 stickyScroll = new { enabled = _editorPreferences.StickyScroll }
             }
         });
-        await PostEditorMessageAsync(new { type = "setAiCompletionEnabled", value = _editorPreferences.GeminiInlineCompletionEnabled });
+        UpdateGeminiInlineCompletionPauseButton();
+        await PostEditorMessageAsync(new { type = "setAiCompletionEnabled", value = IsGeminiInlineCompletionAvailable });
     }
 
     private Task SendUserSnippetsAsync() => PostEditorMessageAsync(new { type = "setUserSnippets", snippets = _snippetService.Load() });

@@ -6,12 +6,120 @@ using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Threading;
 
 namespace KeyceCode;
 
 public partial class MainWindow
 {
+    private const int TerminalAiTranscriptLimit = 24_000;
+    private static readonly Regex TerminalEscapeSequence = new(@"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))", RegexOptions.Compiled);
+    private static readonly Regex TerminalErrorIndicator = new(@"(?im)(\berror\b|\bexception\b|\btraceback\b|\bfatal\b|\bfailed\b|\bfailure\b|\bnot recognized\b|\bnot found\b|\bmissing\b|\baccess is denied\b|\bpermission denied\b|\bcannot\b|\bcould not\b|\bunable to\b|\bCS\d{4}\b|\bMSB\d{4}\b|\bNU\d{4}\b|npm ERR!|SyntaxError|TypeError:|ModuleNotFoundError)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private DateTimeOffset? _geminiInlineCompletionPausedUntil;
+    private DispatcherTimer? _geminiInlineCompletionPauseTimer;
+    private bool IsGeminiInlineCompletionAvailable => _editorPreferences.GeminiInlineCompletionEnabled &&
+        (_geminiInlineCompletionPausedUntil is null || _geminiInlineCompletionPausedUntil <= DateTimeOffset.UtcNow);
+
+    private void GeminiCompletionPauseButton_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu();
+        menu.SetResourceReference(Control.BackgroundProperty, "SidebarBackground");
+        menu.SetResourceReference(Control.ForegroundProperty, "ForegroundBrush");
+        if (_geminiInlineCompletionPausedUntil is not null)
+        {
+            var resume = new MenuItem { Header = "Reprendre l’autocomplétion maintenant" };
+            resume.Click += async (_, _) => await SetGeminiInlineCompletionPauseAsync(null);
+            menu.Items.Add(resume);
+            menu.Items.Add(new Separator());
+        }
+
+        if (!_editorPreferences.GeminiInlineCompletionEnabled)
+        {
+            menu.Items.Add(new MenuItem { Header = "Autocomplétion désactivée dans les paramètres", IsEnabled = false });
+            var openSettings = new MenuItem { Header = "Ouvrir les paramètres…" };
+            openSettings.Click += (_, _) => Settings_Click(sender, new RoutedEventArgs());
+            menu.Items.Add(openSettings);
+        }
+        else
+        {
+            var suspend = new MenuItem { Header = "Suspendre pendant…" };
+            for (var minutes = 5; minutes <= 60; minutes += 5)
+            {
+                var item = new MenuItem { Header = $"{minutes} minutes" };
+                item.Click += async (_, _) => await SetGeminiInlineCompletionPauseAsync(minutes);
+                suspend.Items.Add(item);
+            }
+            menu.Items.Add(suspend);
+        }
+
+        menu.PlacementTarget = GeminiCompletionPauseButton;
+        menu.Placement = PlacementMode.Top;
+        GeminiCompletionPauseButton.ContextMenu = menu;
+        menu.IsOpen = true;
+    }
+
+    private async Task SetGeminiInlineCompletionPauseAsync(int? minutes)
+    {
+        _geminiInlineCompletionPausedUntil = minutes is > 0 ? DateTimeOffset.UtcNow.AddMinutes(minutes.Value) : null;
+        if (_geminiInlineCompletionPausedUntil is null)
+        {
+            _geminiInlineCompletionPauseTimer?.Stop();
+            _geminiInlineCompletionPauseTimer = null;
+        }
+        else
+        {
+            _geminiInlineCompletionPauseTimer ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _geminiInlineCompletionPauseTimer.Tick -= GeminiInlineCompletionPauseTimer_Tick;
+            _geminiInlineCompletionPauseTimer.Tick += GeminiInlineCompletionPauseTimer_Tick;
+            _geminiInlineCompletionPauseTimer.Start();
+        }
+
+        foreach (var request in _geminiInlineRequests.Values) request.Cancel();
+        UpdateGeminiInlineCompletionPauseButton();
+        await PostEditorMessageAsync(new { type = "setAiCompletionEnabled", value = IsGeminiInlineCompletionAvailable });
+        StatusMessage.Text = minutes is > 0
+            ? $"Autocomplétion Gemini suspendue pendant {minutes} minutes."
+            : "Autocomplétion Gemini reprise selon les paramètres.";
+    }
+
+    private async void GeminiInlineCompletionPauseTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_geminiInlineCompletionPausedUntil is not { } resumeAt) return;
+        var remaining = resumeAt - DateTimeOffset.UtcNow;
+        if (remaining > TimeSpan.Zero)
+        {
+            UpdateGeminiInlineCompletionPauseButton();
+            return;
+        }
+
+        _geminiInlineCompletionPausedUntil = null;
+        _geminiInlineCompletionPauseTimer?.Stop();
+        _geminiInlineCompletionPauseTimer = null;
+        UpdateGeminiInlineCompletionPauseButton();
+        foreach (var request in _geminiInlineRequests.Values) request.Cancel();
+        await PostEditorMessageAsync(new { type = "setAiCompletionEnabled", value = IsGeminiInlineCompletionAvailable });
+        StatusMessage.Text = "La pause est terminée · autocomplétion Gemini reprise.";
+    }
+
+    private void UpdateGeminiInlineCompletionPauseButton()
+    {
+        var remaining = _geminiInlineCompletionPausedUntil - DateTimeOffset.UtcNow;
+        if (remaining is { } value && value > TimeSpan.Zero)
+        {
+            GeminiCompletionPauseButton.Content = "🤖 ⏸";
+            GeminiCompletionPauseButton.ToolTip = $"Autocomplétion suspendue · reprise dans {Math.Ceiling(value.TotalMinutes):00}:{value.Seconds:00}. Cliquer pour les options.";
+        }
+        else
+        {
+            GeminiCompletionPauseButton.Content = "🤖";
+            GeminiCompletionPauseButton.ToolTip = _editorPreferences.GeminiInlineCompletionEnabled
+                ? "Autocomplétion Gemini active · cliquer pour la suspendre par tranches de 5 minutes"
+                : "Autocomplétion Gemini désactivée dans les paramètres · cliquer pour les options";
+        }
+    }
+
     private const int MaximumAssistantContextCharacters = 60_000;
     private const int MaximumAssistantFileBytes = 256 * 1024;
     private const int MaximumAssistantContextFiles = 60;
@@ -206,7 +314,23 @@ public partial class MainWindow
     private void QueueOrWriteTerminal(ConPtySession session, string text)
     {
         var tab = _terminalTabs.Values.FirstOrDefault(candidate => ReferenceEquals(candidate.Session, session));
-        if (tab is not null) WriteTerminalOutput(tab, text);
+        if (tab is not null)
+        {
+            var cleanText = TerminalEscapeSequence.Replace(text, string.Empty);
+            tab.Transcript.Append(cleanText);
+            if (tab.Transcript.Length > TerminalAiTranscriptLimit)
+                tab.Transcript.Remove(0, tab.Transcript.Length - TerminalAiTranscriptLimit);
+            if (!tab.HasDetectedError && TerminalErrorIndicator.IsMatch(tab.Transcript.ToString()))
+            {
+                tab.HasDetectedError = true;
+                if (_activeTerminalId == tab.Id)
+                {
+                    ExplainTerminalErrorButton.IsEnabled = true;
+                    StatusMessage.Text = "Erreur détectée dans le terminal · KeyceIA peut l’expliquer.";
+                }
+            }
+            WriteTerminalOutput(tab, text);
+        }
         if (!_buildOutputParsers.TryGetValue(session, out var parser)) return;
         foreach (var diagnostic in parser.Append(text))
         {

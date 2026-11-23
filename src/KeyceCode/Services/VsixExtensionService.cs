@@ -9,6 +9,7 @@ namespace KeyceCode.Services;
 
 public sealed record InstalledExtension(string Id, string DisplayName, string Version, string Path);
 public sealed record VsCodeExtensionImportResult(IReadOnlyList<InstalledExtension> Imported, IReadOnlyList<string> Skipped);
+public sealed record VsixInstallProgress(string Phase, long BytesProcessed, long TotalBytes);
 
 /// <summary>Installs VSIX archives as inert files. This service never loads or starts extension code.</summary>
 public sealed class VsixExtensionService
@@ -97,9 +98,11 @@ public sealed class VsixExtensionService
             throw new InvalidDataException("Les liens et points de réanalyse ne sont pas importés.");
     }
 
-    public async Task<InstalledExtension> InstallAsync(string vsixPath, CancellationToken cancellationToken = default)
+    public async Task<InstalledExtension> InstallAsync(string vsixPath, CancellationToken cancellationToken = default,
+        IProgress<VsixInstallProgress>? progress = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(vsixPath);
+        progress?.Report(new("Validation du paquet VSIX…", 0, 0));
         var source = Path.GetFullPath(vsixPath);
         if (!File.Exists(source) || !source.EndsWith(".vsix", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Sélectionnez un fichier VSIX existant.");
@@ -130,7 +133,12 @@ public sealed class VsixExtensionService
                 if (Directory.Exists(destination) || File.Exists(destination))
                     throw new IOException($"L’extension {metadata.Id}@{metadata.Version} est déjà installée.");
 
-                long expandedTotal = 0;
+                var expandedTotal = archive.Entries.Aggregate(0L, (total, entry) => checked(total + entry.Length));
+                if (expandedTotal > MaximumExpandedBytes)
+                    throw new InvalidDataException("Le contenu décompressé du VSIX dépasse 512 Mo.");
+                progress?.Report(new("Installation du VSIX…", 0, expandedTotal));
+                long expandedCopied = 0;
+                var lastProgress = Environment.TickCount64;
                 foreach (var entry in archive.Entries)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -143,9 +151,6 @@ public sealed class VsixExtensionService
                         continue;
                     }
 
-                    expandedTotal = checked(expandedTotal + entry.Length);
-                    if (expandedTotal > MaximumExpandedBytes)
-                        throw new InvalidDataException("Le contenu décompressé du VSIX dépasse 512 Mo.");
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     await using var input = entry.Open();
                     await using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
@@ -158,6 +163,12 @@ public sealed class VsixExtensionService
                         if (copied > entry.Length || copied > MaximumExpandedBytes)
                             throw new InvalidDataException("Une entrée VSIX dépasse sa taille déclarée.");
                         await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                        expandedCopied += read;
+                        if (Environment.TickCount64 - lastProgress >= 100 || expandedCopied == expandedTotal)
+                        {
+                            progress?.Report(new("Installation du VSIX…", expandedCopied, expandedTotal));
+                            lastProgress = Environment.TickCount64;
+                        }
                     }
                     if (copied != entry.Length)
                         throw new InvalidDataException("La taille d’une entrée VSIX ne correspond pas à l’archive.");
@@ -167,6 +178,7 @@ public sealed class VsixExtensionService
                 if (!File.Exists(Path.Combine(stagingRoot, "extension", "package.json")))
                     throw new InvalidDataException("Le manifeste est absent après extraction.");
                 Directory.Move(stagingRoot, destination);
+                progress?.Report(new("Extension installée.", expandedTotal, expandedTotal));
                 return new InstalledExtension(metadata.Id, metadata.DisplayName, metadata.Version, destination);
             }
         }

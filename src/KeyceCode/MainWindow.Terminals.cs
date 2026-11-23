@@ -16,11 +16,14 @@ public partial class MainWindow
         public required string Profile { get; init; }
         public required ConPtySession Session { get; init; }
         public StringBuilder PendingOutput { get; } = new();
+        public StringBuilder Transcript { get; } = new();
+        public bool HasDetectedError { get; set; }
     }
 
     private readonly Dictionary<string, TerminalTab> _terminalTabs = new(StringComparer.Ordinal);
     private string? _activeTerminalId;
     private bool _changingTerminalSelection;
+    private CancellationTokenSource? _terminalAiAnalysisCancellation;
 
     private async Task EnsureTerminalWebViewReadyAsync()
     {
@@ -76,6 +79,7 @@ public partial class MainWindow
         _terminalSession = tab.Session;
         _activeTerminalProfile = tab.Profile;
         TerminalProfileLabel.Text = tab.Profile;
+        ExplainTerminalErrorButton.IsEnabled = tab.HasDetectedError;
         _changingTerminalSelection = true;
         try
         {
@@ -84,6 +88,51 @@ public partial class MainWindow
         finally { _changingTerminalSelection = false; }
         PostTerminalMessage(new { type = "switchSession", id });
     }
+
+    private async void ExplainTerminalError_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeTerminalId is not { } id || !_terminalTabs.TryGetValue(id, out var tab) || !tab.HasDetectedError)
+        {
+            StatusMessage.Text = "Aucune erreur détectée dans le terminal actif.";
+            return;
+        }
+
+        _terminalAiAnalysisCancellation?.Cancel();
+        _terminalAiAnalysisCancellation?.Dispose();
+        var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(75));
+        _terminalAiAnalysisCancellation = cancellation;
+        TerminalAiExplanationPanel.Visibility = Visibility.Visible;
+        TerminalAiExplanation.Text = "KeyceIA analyse la sortie du terminal…";
+        ExplainTerminalErrorButton.IsEnabled = false;
+        try
+        {
+            var workingDirectory = _buildOutputWorkingDirectories.GetValueOrDefault(tab.Session) ?? Environment.CurrentDirectory;
+            var prompt = "Analyse précisément cette sortie d’erreur de terminal. Réponds en français. " +
+                "N’invente pas de détails absents; sépare clairement les faits des hypothèses et donne une commande ou une modification concrète pour corriger le problème. " +
+                "Utilise exactement ces rubriques : Erreur précise, Cause, Comment réparer, À retenir (une courte leçon pour apprendre).\n\n" +
+                $"Terminal : {tab.Profile}\nDossier courant : {workingDirectory}\n\nSortie récente du terminal :\n```text\n{tab.Transcript}\n```";
+            TerminalAiExplanation.Text = await _gemini.AskAsync(prompt, cancellation.Token);
+            StatusMessage.Text = "Explication KeyceIA prête · regarde le panneau du terminal.";
+        }
+        catch (OperationCanceledException)
+        {
+            TerminalAiExplanation.Text = "Analyse annulée.";
+        }
+        catch (Exception ex)
+        {
+            TerminalAiExplanation.Text = "KeyceIA n’a pas pu analyser cette erreur : " + ex.Message;
+            StatusMessage.Text = "Analyse KeyceIA impossible · consulte le panneau du terminal.";
+        }
+        finally
+        {
+            if (ReferenceEquals(_terminalAiAnalysisCancellation, cancellation)) _terminalAiAnalysisCancellation = null;
+            cancellation.Dispose();
+            if (_activeTerminalId == tab.Id) ExplainTerminalErrorButton.IsEnabled = tab.HasDetectedError;
+        }
+    }
+
+    private void CloseTerminalAiExplanation_Click(object sender, RoutedEventArgs e) =>
+        TerminalAiExplanationPanel.Visibility = Visibility.Collapsed;
 
     private void TerminalTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
