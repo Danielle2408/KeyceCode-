@@ -58,6 +58,7 @@ public partial class MainWindow : Window
         FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
         _autoSaveTimer.Tick += AutoSaveTimer_Tick;
         OutputPanel.Text = "KeyceCode output\r\n";
+        SourceInitialized += (_, _) => AttachMaximizeWorkAreaHook();
         Loaded += MainWindow_Loaded;
         Closed += MainWindow_Closed;
         ((App)Application.Current).ThemeService.ThemeChanged += (_, theme) =>

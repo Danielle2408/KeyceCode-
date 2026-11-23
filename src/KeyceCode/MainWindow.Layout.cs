@@ -1,12 +1,91 @@
 using KeyceCode.Services;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 
 namespace KeyceCode;
 
 public partial class MainWindow
 {
+    private const int WmGetMinMaxInfo = 0x0024;
+    private const uint MonitorDefaultToNearest = 2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMinMaxInfo
+    {
+        public NativePoint Reserved;
+        public NativePoint MaxSize;
+        public NativePoint MaxPosition;
+        public NativePoint MinTrackSize;
+        public NativePoint MaxTrackSize;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    private struct NativeMonitorInfo
+    {
+        public int Size;
+        public NativeRect Monitor;
+        public NativeRect Work;
+        public uint Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern nint MonitorFromWindow(nint hwnd, uint flags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetMonitorInfo(nint monitor, ref NativeMonitorInfo info);
+
+    private void AttachMaximizeWorkAreaHook()
+    {
+        var handle = new WindowInteropHelper(this).Handle;
+        HwndSource.FromHwnd(handle)?.AddHook(HandleMaximizeWorkArea);
+    }
+
+    private static nint HandleMaximizeWorkArea(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
+    {
+        if (message != WmGetMinMaxInfo || lParam == nint.Zero) return nint.Zero;
+
+        var monitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
+        if (monitor == nint.Zero) return nint.Zero;
+
+        var monitorInfo = new NativeMonitorInfo { Size = Marshal.SizeOf<NativeMonitorInfo>() };
+        if (!GetMonitorInfo(monitor, ref monitorInfo)) return nint.Zero;
+
+        var minMax = Marshal.PtrToStructure<NativeMinMaxInfo>(lParam);
+        minMax.MaxPosition = new NativePoint
+        {
+            X = monitorInfo.Work.Left - monitorInfo.Monitor.Left,
+            Y = monitorInfo.Work.Top - monitorInfo.Monitor.Top
+        };
+        minMax.MaxSize = new NativePoint
+        {
+            X = monitorInfo.Work.Right - monitorInfo.Work.Left,
+            Y = monitorInfo.Work.Bottom - monitorInfo.Work.Top
+        };
+        Marshal.StructureToPtr(minMax, lParam, false);
+        handled = true;
+        return nint.Zero;
+    }
+
     private readonly WorkbenchLayoutService _layoutService = new();
     private double _rememberedSidebarWidth = 250;
     private double _rememberedPanelHeight = 230;
