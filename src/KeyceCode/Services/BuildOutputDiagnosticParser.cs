@@ -5,7 +5,7 @@ namespace KeyceCode.Services;
 
 public sealed record BuildOutputDiagnostic(string Severity, string Message, string File, int Line, int Column, string? Code);
 
-/// <summary>Extracts MSBuild/Roslyn diagnostics from streamed terminal text.</summary>
+/// <summary>Extracts MSBuild, Roslyn, GCC, Clang, and MSVC diagnostics from streamed terminal text.</summary>
 public sealed class BuildOutputDiagnosticParser
 {
     private const int MaximumLineLength = 8192;
@@ -13,6 +13,9 @@ public sealed class BuildOutputDiagnosticParser
     private static readonly Regex AnsiEscape = new("\\x1B(?:\\[[0-?]*[ -/]*[@-~]|\\][^\\x07]*(?:\\x07|\\x1B\\\\))", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex DiagnosticLine = new(
         @"^(?<file>.+?)\((?<line>[1-9]\d*)(?:,(?<column>[1-9]\d*))?(?:,\d+,\d+)?\):\s*(?<severity>error|warning|info)\s*(?<code>[A-Za-z]+\d+)?\s*:\s*(?<message>.*?)(?:\s+\[[^\]]+\])?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex GccDiagnosticLine = new(
+        @"^(?<file>(?:[A-Za-z]:)?[^:]+):(?<line>\d+)(?::(?<column>\d+))?:\s*(?<severity>fatal error|error|warning|note):\s*(?<message>.*)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private readonly StringBuilder _line = new();
@@ -62,6 +65,7 @@ public sealed class BuildOutputDiagnosticParser
     {
         var line = AnsiEscape.Replace(rawLine, string.Empty).Trim();
         var match = DiagnosticLine.Match(line);
+        if (!match.Success) match = GccDiagnosticLine.Match(line);
         if (!match.Success ||
             !int.TryParse(match.Groups["line"].Value, out var lineNumber) ||
             !int.TryParse(match.Groups["column"].Success ? match.Groups["column"].Value : "1", out var column))
@@ -69,7 +73,7 @@ public sealed class BuildOutputDiagnosticParser
 
         var severity = match.Groups["severity"].Value.ToLowerInvariant() switch
         {
-            "error" => "Error",
+            "error" or "fatal error" => "Error",
             "warning" => "Warning",
             _ => "Info"
         };

@@ -425,6 +425,16 @@ public partial class MainWindow
             command = $"dotnet run --project {QuotePath(selectedProject)}";
             directory = Path.GetDirectoryName(selectedProject)!;
         }
+        else if (extension is ".c" or ".cc" or ".cpp" or ".cxx" or ".c++")
+        {
+            var compiler = FindNativeCompiler(extension != ".c");
+            if (compiler is null) { ShowNativeCompilerMissing(extension); return; }
+            var output = Path.ChangeExtension(path, ".exe");
+            var compile = BuildNativeCompileCommand(compiler, path, output, extension != ".c", isCmd, QuotePath);
+            command = isCmd ? $"{compile} && {QuoteCmd(output)}"
+                : $"{compile}; if ($LASTEXITCODE -eq 0) {{ & {Quote(output)} }}";
+        }
+        else if (extension == ".exe") command = isCmd ? QuoteCmd(path) : "& " + Quote(path);
         else if (extension == ".py") command = $"python {QuotePath(path)}";
         else if (extension is ".js" or ".mjs") command = $"node {QuotePath(path)}";
         else if (extension == ".ps1") command = isCmd ? $"powershell.exe -ExecutionPolicy Bypass -File {QuoteCmd(path)}" : $"& {Quote(path)}";
@@ -442,7 +452,10 @@ public partial class MainWindow
         }
         else { StatusMessage.Text = $"Aucune commande Run configurée pour {extension}."; return; }
 
-        await RunInIntegratedTerminalAsync(command, directory, $"Lancement : {Path.GetFileName(path)}");
+        var nativeSource = extension is ".c" or ".cc" or ".cpp" or ".cxx" or ".c++";
+        await RunInIntegratedTerminalAsync(command, directory,
+            nativeSource ? $"Compilation et lancement : {Path.GetFileName(path)}" : $"Lancement : {Path.GetFileName(path)}",
+            captureBuildOutput: nativeSource);
     }
 
     private async void Build_Click(object sender, RoutedEventArgs e)
@@ -472,6 +485,14 @@ public partial class MainWindow
         }
         else if (extension == ".py") command = $"python -m py_compile {QuotePath(path)}";
         else if (extension is ".js" or ".mjs" or ".cjs") command = $"node --check {QuotePath(path)}";
+        else if (extension is ".c" or ".cc" or ".cpp" or ".cxx" or ".c++")
+        {
+            var isCpp = extension != ".c";
+            var compiler = FindNativeCompiler(isCpp);
+            if (compiler is null) { ShowNativeCompilerMissing(extension); return; }
+            target = Path.ChangeExtension(path, ".exe");
+            command = BuildNativeCompileCommand(compiler, path, target, isCpp, isCmd, QuotePath);
+        }
         else
         {
             StatusMessage.Text = $"Aucune commande de compilation configurée pour {extension}.";
@@ -482,6 +503,44 @@ public partial class MainWindow
         var buildDirectory = Path.GetDirectoryName(buildTarget) ?? Path.GetDirectoryName(path)!;
         await RunInIntegratedTerminalAsync(command, buildDirectory,
             $"Compilation : {Path.GetFileName(buildTarget)}", captureBuildOutput: true);
+    }
+
+    private static string? FindNativeCompiler(bool cPlusPlus)
+    {
+        var candidates = cPlusPlus
+            ? new[] { "g++.exe", "clang++.exe", "clang-cl.exe", "cl.exe" }
+            : new[] { "gcc.exe", "clang.exe", "clang-cl.exe", "cl.exe" };
+        var fromPath = candidates.Select(FindExecutable).FirstOrDefault(path => path is not null);
+        if (fromPath is not null) return fromPath;
+
+        // Common MSYS2 toolchain locations let the editor work without changing the user's global PATH.
+        var roots = new[] { @"C:\msys64\mingw64\bin", @"C:\msys64\ucrt64\bin", @"C:\msys64\clang64\bin" };
+        return roots.SelectMany(root => candidates.Select(name => Path.Combine(root, name)))
+            .FirstOrDefault(File.Exists);
+    }
+
+    private static string BuildNativeCompileCommand(string compiler, string sourcePath, string outputPath,
+        bool cPlusPlus, bool commandPrompt, Func<string, string> quotePath)
+    {
+        var compilerName = Path.GetFileName(compiler);
+        var isMsvcStyle = compilerName.Equals("cl.exe", StringComparison.OrdinalIgnoreCase) ||
+            compilerName.Equals("clang-cl.exe", StringComparison.OrdinalIgnoreCase);
+        var invocation = commandPrompt ? QuoteCmd(compiler) : "& " + Quote(compiler);
+        if (isMsvcStyle)
+        {
+            var flags = cPlusPlus ? "/nologo /W4 /EHsc /std:c++17" : "/nologo /W4 /std:c17";
+            return $"{invocation} {flags} /Fe:{quotePath(outputPath)} {quotePath(sourcePath)}";
+        }
+        var standard = cPlusPlus ? "c++17" : "c17";
+        return $"{invocation} -std={standard} -Wall -Wextra {quotePath(sourcePath)} -o {quotePath(outputPath)}";
+    }
+
+    private void ShowNativeCompilerMissing(string extension)
+    {
+        var language = extension == ".c" ? "C" : "C++";
+        StatusMessage.Text = $"Compilateur {language} introuvable.";
+        OutputPanel.AppendText("Compilation C/C++ impossible : installe GCC (MinGW-w64), LLVM/Clang ou Microsoft C++ Build Tools, puis ajoute le compilateur au PATH du terminal.\r\n");
+        ShowPanel("Output");
     }
 
     private (string? Project, bool HasCandidates) SelectNearestProject(string sourcePath, string prompt)
