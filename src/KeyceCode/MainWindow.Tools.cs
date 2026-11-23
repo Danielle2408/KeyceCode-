@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -11,6 +12,10 @@ namespace KeyceCode;
 
 public partial class MainWindow
 {
+    private const int MaximumAssistantContextCharacters = 60_000;
+    private const int MaximumAssistantFileBytes = 256 * 1024;
+    private const int MaximumAssistantContextFiles = 60;
+    private readonly List<AssistantContextAttachment> _assistantContextAttachments = [];
     private string? _activeTerminalProfile;
     private readonly WorkspaceSearchService _workspaceSearch = new();
     private CancellationTokenSource? _workspaceSearchCancellation;
@@ -742,15 +747,190 @@ public partial class MainWindow
 
     private async void Ask_Click(object sender, RoutedEventArgs e)
     {
-        var prompt = PromptBox.Text.Trim();
-        if (prompt.Length == 0) return;
+        var userMessage = PromptBox.Text.Trim();
+        if (userMessage.Length == 0) return;
         PromptBox.Tag = null;
-        if (!string.IsNullOrWhiteSpace(_selectedText)) prompt += "\n\nSélection explicitement partagée :\n" + _selectedText;
-        AssistantOutput.Text = "KeyceIA réfléchit…";
+        AssistantOutput.Text = "Lecture du contexte joint…";
         AiProposalPreview.Visibility = Visibility.Collapsed;
-        try { AssistantOutput.Text = await _gemini.AskAsync(prompt); }
+        try
+        {
+            var prompt = await BuildAssistantPromptAsync(userMessage);
+            AssistantOutput.Text = "KeyceIA réfléchit…";
+            AssistantOutput.Text = await _gemini.AskAsync(prompt);
+            if (string.Equals(PromptBox.Text.Trim(), userMessage, StringComparison.Ordinal)) PromptBox.Clear();
+        }
         catch (Exception ex) { AssistantOutput.Text = ex.Message; }
     }
+
+    private async Task<string> BuildAssistantPromptAsync(string message)
+    {
+        var prompt = new StringBuilder(message);
+        if (!string.IsNullOrWhiteSpace(_selectedText))
+            prompt.Append("\n\nSélection de code explicitement partagée :\n````\n").Append(_selectedText).Append("\n````");
+        if (_assistantContextAttachments.Count == 0) return prompt.ToString();
+
+        prompt.Append("\n\nContexte des fichiers joints (texte envoyé à Gemini pour répondre à cette demande) :\n");
+        var total = 0;
+        var fileCount = 0;
+        foreach (var attachment in _assistantContextAttachments.ToArray())
+        {
+            if (fileCount >= MaximumAssistantContextFiles || total >= MaximumAssistantContextCharacters) break;
+            if (attachment.ContentSnapshot is not null)
+            {
+                AppendAssistantContext(prompt, attachment.DisplayName, attachment.ContentSnapshot, ref total);
+                fileCount++;
+                continue;
+            }
+
+            if (File.Exists(attachment.Path))
+            {
+                var content = attachment.ContentSnapshot ?? _documents.FirstOrDefault(document =>
+                    string.Equals(document.Path, attachment.Path, StringComparison.OrdinalIgnoreCase))?.Text
+                    ?? await ReadAssistantTextFileAsync(attachment.Path);
+                if (content is not null) { AppendAssistantContext(prompt, attachment.DisplayName, content, ref total); fileCount++; }
+                continue;
+            }
+
+            if (!Directory.Exists(attachment.Path)) continue;
+            foreach (var file in EnumerateAssistantContextFiles(attachment.Path))
+            {
+                if (fileCount >= MaximumAssistantContextFiles || total >= MaximumAssistantContextCharacters) break;
+                var content = _documents.FirstOrDefault(document =>
+                    string.Equals(document.Path, file, StringComparison.OrdinalIgnoreCase))?.Text
+                    ?? await ReadAssistantTextFileAsync(file);
+                if (content is null) continue;
+                var relative = Path.GetRelativePath(attachment.Path, file);
+                AppendAssistantContext(prompt, Path.Combine(attachment.DisplayName, relative), content, ref total);
+                fileCount++;
+            }
+        }
+        if (fileCount == 0) prompt.Append("\n[Aucun fichier texte lisible trouvé dans les pièces jointes.]\n");
+        if (fileCount >= MaximumAssistantContextFiles || total >= MaximumAssistantContextCharacters)
+            prompt.Append("\n[Contexte tronqué pour rester dans la limite d’envoi.]\n");
+        AssistantContextStatus.Text = $"{fileCount} fichier(s) lus · {total:N0} caractères envoyés à Gemini avec ce message";
+        return prompt.ToString();
+    }
+
+    private static void AppendAssistantContext(StringBuilder prompt, string name, string content, ref int total)
+    {
+        var remaining = Math.Max(0, MaximumAssistantContextCharacters - total);
+        if (remaining == 0) return;
+        var excerpt = content.Length > remaining ? content[..remaining] : content;
+        prompt.Append("\n--- Fichier : ").Append(name).Append(" ---\n````\n").Append(excerpt).Append("\n````\n");
+        total += excerpt.Length;
+    }
+
+    private static async Task<string?> ReadAssistantTextFileAsync(string file)
+    {
+        try
+        {
+            var info = new FileInfo(file);
+            if (!info.Exists || info.Length > MaximumAssistantFileBytes) return null;
+            var bytes = await File.ReadAllBytesAsync(file);
+            if (bytes.AsSpan(0, Math.Min(bytes.Length, 4096)).Contains((byte)0)) return null;
+            return await File.ReadAllTextAsync(file);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        { return null; }
+    }
+
+    private static IEnumerable<string> EnumerateAssistantContextFiles(string root)
+    {
+        var ignoredDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { ".git", ".vs", "bin", "obj", "node_modules", "packages", "artifacts", "dist", "coverage" };
+        var stack = new Stack<string>();
+        stack.Push(root);
+        var collected = new List<string>();
+        while (stack.Count > 0 && collected.Count < MaximumAssistantContextFiles)
+        {
+            var directory = stack.Pop();
+            try
+            {
+                foreach (var entry in Directory.EnumerateFileSystemEntries(directory).OrderBy(value => value, StringComparer.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var attributes = File.GetAttributes(entry);
+                        if ((attributes & FileAttributes.ReparsePoint) != 0) continue;
+                        if ((attributes & FileAttributes.Directory) != 0)
+                        {
+                            if (!ignoredDirectories.Contains(Path.GetFileName(entry))) stack.Push(entry);
+                        }
+                        else if (collected.Count < MaximumAssistantContextFiles && IsAssistantTextFile(entry)) collected.Add(entry);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return collected;
+    }
+
+    private static bool IsAssistantTextFile(string file) => Path.GetExtension(file).ToLowerInvariant() is
+        ".cs" or ".csx" or ".js" or ".jsx" or ".mjs" or ".cjs" or ".ts" or ".tsx" or ".py" or ".java" or
+        ".html" or ".htm" or ".css" or ".scss" or ".json" or ".jsonc" or ".md" or ".txt" or ".xml" or ".xaml" or
+        ".yaml" or ".yml" or ".sql" or ".sh" or ".ps1" or ".bat" or ".cmd" or ".c" or ".cpp" or ".h" or ".hpp" or
+        ".go" or ".rs" or ".php" or ".vue" or ".svelte" or ".toml" or ".ini" or ".config" or ".props" or
+        ".targets" or ".csproj" or ".sln" or ".gradle" or ".dart" or ".rb" or ".swift" or ".kt" or ".kts";
+
+    private void AttachAssistantFile_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog { Title = "Joindre un fichier au message KeyceIA", Filter = "Tous les fichiers|*.*", Multiselect = true, CheckFileExists = true };
+        if (dialog.ShowDialog(this) != true) return;
+        foreach (var file in dialog.FileNames) AddAssistantContext(file, null);
+    }
+
+    private void AttachAssistantFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog { Title = "Joindre un dossier au message KeyceIA", Multiselect = false };
+        if (dialog.ShowDialog(this) == true) AddAssistantContext(dialog.FolderName, null);
+    }
+
+    private void AttachActiveDocument_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeDocument is not { } document) { AssistantContextStatus.Text = "Aucun fichier ouvert à joindre."; return; }
+        AddAssistantContext(document.Path, string.IsNullOrWhiteSpace(document.Path) ? document.Text : null, document.Name);
+    }
+
+    private void AddAssistantContext(string path, string? snapshot, string? displayName = null)
+    {
+        var fullPath = string.IsNullOrWhiteSpace(path) ? string.Empty : Path.GetFullPath(path);
+        if (_assistantContextAttachments.Any(item => item.Path.Equals(fullPath, StringComparison.OrdinalIgnoreCase))) return;
+        var attachment = new AssistantContextAttachment(fullPath, snapshot,
+            displayName ?? Path.GetFileName(Path.TrimEndingDirectorySeparator(fullPath)));
+        _assistantContextAttachments.Add(attachment);
+        AssistantContextList.Items.Add(attachment);
+        AssistantContextList.Visibility = Visibility.Visible;
+        AssistantContextStatus.Text = $"{_assistantContextAttachments.Count} élément(s) joint(s) · envoyé(s) uniquement avec Envoyer";
+    }
+
+    private void RemoveAssistantContext_Click(object sender, RoutedEventArgs e)
+    {
+        if (AssistantContextList.SelectedItem is not AssistantContextAttachment attachment) return;
+        _assistantContextAttachments.Remove(attachment);
+        AssistantContextList.Items.Remove(attachment);
+        AssistantContextList.Visibility = _assistantContextAttachments.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        AssistantContextStatus.Text = _assistantContextAttachments.Count == 0 ? "Aucun fichier joint · colle aussi du code avec Ctrl+V" : $"{_assistantContextAttachments.Count} élément(s) joint(s)";
+    }
+
+    private void PasteCodeIntoPrompt_Click(object sender, RoutedEventArgs e)
+    {
+        if (!Clipboard.ContainsText()) { AssistantContextStatus.Text = "Le presse-papiers ne contient pas de texte."; return; }
+        PromptBox.Focus();
+        PromptBox.SelectedText = Clipboard.GetText();
+        AssistantContextStatus.Text = "Code collé dans le message · clique Envoyer ou fais Ctrl+Entrée";
+    }
+
+    private void PromptBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            e.Handled = true;
+            Ask_Click(sender, new RoutedEventArgs());
+        }
+    }
+
+    private sealed record AssistantContextAttachment(string Path, string? ContentSnapshot, string DisplayName);
 
     private async void Complete_Click(object sender, RoutedEventArgs e)
     {
