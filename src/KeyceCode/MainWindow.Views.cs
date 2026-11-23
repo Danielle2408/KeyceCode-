@@ -463,13 +463,36 @@ internal sealed class QuickPickWindow : Window
         return window.ShowDialog() == true ? window.Tag?.ToString() : null;
     }
 
-    public static string? Prompt(Window owner, string title, string placeholder, string? initialValue = null)
+    public static string? Prompt(Window owner, string title, string placeholder, string? initialValue = null, string? confirmLabel = null)
     {
         var window = new QuickPickWindow(title, []) { Owner = owner };
+        if (confirmLabel is not null)
+        {
+            window.Height = 170;
+            window._list.Visibility = Visibility.Collapsed;
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0) };
+            var cancel = new Button { Content = "Annuler", MinWidth = 86, Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
+            var confirm = new Button { Content = confirmLabel, MinWidth = 100, IsDefault = true };
+            confirm.Click += (_, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(window._search.Text))
+                {
+                    window._search.Focus();
+                    return;
+                }
+                window.Tag = window._search.Text.Trim();
+                window.DialogResult = true;
+            };
+            actions.Children.Add(cancel);
+            actions.Children.Add(confirm);
+            DockPanel.SetDock(actions, Dock.Bottom);
+            ((DockPanel)window.Content).Children.Insert(1, actions);
+        }
         window._search.ToolTip = placeholder;
         window._search.Text = initialValue ?? string.Empty;
         window._search.KeyDown += (sender, e) =>
         {
+            if (confirmLabel is not null) return;
             if (e.Key != Key.Enter || string.IsNullOrWhiteSpace(window._search.Text)) return;
             window.Tag = window._search.Text.Trim();
             window.DialogResult = true;

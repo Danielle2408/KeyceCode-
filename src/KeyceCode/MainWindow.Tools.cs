@@ -511,7 +511,7 @@ public partial class MainWindow
     private async void AssociateGitHub_Click(object sender, RoutedEventArgs e)
     {
         if (_workspace is null) { StatusMessage.Text = "Ouvre un dossier avant d’associer un dépôt GitHub."; return; }
-        var entered = QuickPickWindow.Prompt(this, "Associer un dépôt GitHub", "URL HTTPS ou SSH du dépôt", "https://github.com/");
+        var entered = QuickPickWindow.Prompt(this, "Associer un dépôt GitHub", "URL HTTPS ou SSH du dépôt", "https://github.com/", "Associer");
         if (string.IsNullOrWhiteSpace(entered)) return;
         if (!TryParseGitHubRemote(entered, out var remoteUrl, out var webUrl))
         {
