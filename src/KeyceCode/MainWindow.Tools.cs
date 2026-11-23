@@ -492,7 +492,6 @@ public partial class MainWindow
         if (_workspace is null) throw new InvalidOperationException("Aucun dossier ouvert.");
         var info = new ProcessStartInfo("git") { WorkingDirectory = _workspace.RootPath, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
         info.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        info.Environment["GCM_INTERACTIVE"] = "Never";
         foreach (var argument in arguments) info.ArgumentList.Add(argument);
         using var process = Process.Start(info) ?? throw new InvalidOperationException("Git n’a pas pu démarrer.");
         var stdout = process.StandardOutput.ReadToEndAsync(); var stderr = process.StandardError.ReadToEndAsync();
@@ -503,6 +502,101 @@ public partial class MainWindow
     }
 
     private async void RefreshGit_Click(object sender, RoutedEventArgs e) => await RefreshGitAsync();
+
+    private async void AssociateGitHub_Click(object sender, RoutedEventArgs e)
+    {
+        if (_workspace is null) { StatusMessage.Text = "Ouvre un dossier avant d’associer un dépôt GitHub."; return; }
+        var entered = QuickPickWindow.Prompt(this, "Associer un dépôt GitHub", "URL HTTPS ou SSH du dépôt", "https://github.com/");
+        if (string.IsNullOrWhiteSpace(entered)) return;
+        if (!TryParseGitHubRemote(entered, out var remoteUrl, out var webUrl))
+        {
+            MessageBox.Show(this, "Entre une adresse de dépôt github.com valide, par exemple https://github.com/compte/projet.git ou git@github.com:compte/projet.git.",
+                "Adresse GitHub invalide", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        try
+        {
+            string? existing = null;
+            try { existing = (await RunGitAsync("remote", "get-url", "origin")).Trim(); }
+            catch (InvalidOperationException) { }
+            if (!string.IsNullOrWhiteSpace(existing))
+            {
+                if (string.Equals(existing, remoteUrl, StringComparison.OrdinalIgnoreCase))
+                {
+                    StatusMessage.Text = "Ce workspace suit déjà ce dépôt GitHub via origin.";
+                    return;
+                }
+                var replace = MessageBox.Show(this, $"Le remote origin pointe actuellement vers :\n{existing}\n\nLe remplacer par :\n{remoteUrl} ?",
+                    "Remplacer origin", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (replace != MessageBoxResult.Yes) return;
+                await RunGitAsync("remote", "set-url", "origin", remoteUrl);
+            }
+            else await RunGitAsync("remote", "add", "origin", remoteUrl);
+
+            try
+            {
+                var branch = (await RunGitAsync("branch", "--show-current")).Trim();
+                if (!string.IsNullOrWhiteSpace(branch))
+                    await RunGitAsync("push", "--set-upstream", "origin", branch);
+            }
+            catch (Exception ex)
+            {
+                OutputPanel.AppendText("[GitHub] Remote associé, mais premier Push non terminé : " + ex.Message + Environment.NewLine);
+                Process.Start(new ProcessStartInfo(webUrl.AbsoluteUri) { UseShellExecute = true });
+                StatusMessage.Text = "Remote GitHub associé. Connecte-toi dans le navigateur, puis relance Push.";
+                await RefreshGitAsync();
+                return;
+            }
+            Process.Start(new ProcessStartInfo(webUrl.AbsoluteUri) { UseShellExecute = true });
+            await RefreshGitAsync();
+            StatusMessage.Text = "Dépôt GitHub associé et branche publiée : " + webUrl.Host + webUrl.AbsolutePath;
+        }
+        catch (Exception ex)
+        {
+            OutputPanel.AppendText("[GitHub] Association impossible : " + ex.Message + Environment.NewLine);
+            StatusMessage.Text = "Association GitHub impossible · consulte Sortie";
+        }
+    }
+
+    private async void OpenGitHub_Click(object sender, RoutedEventArgs e)
+    {
+        if (_workspace is null) return;
+        try
+        {
+            var remote = (await RunGitAsync("remote", "get-url", "origin")).Trim();
+            if (!TryParseGitHubRemote(remote, out _, out var webUrl))
+            {
+                StatusMessage.Text = "Le remote origin n’est pas un dépôt GitHub.";
+                return;
+            }
+            Process.Start(new ProcessStartInfo(webUrl.AbsoluteUri) { UseShellExecute = true });
+        }
+        catch (Exception ex) { StatusMessage.Text = "Aucun dépôt GitHub associé · " + ex.Message; }
+    }
+
+    private static bool TryParseGitHubRemote(string value, out string remoteUrl, out Uri webUrl)
+    {
+        remoteUrl = string.Empty;
+        webUrl = new Uri("https://github.com/");
+        var text = value.Trim();
+        if (text.StartsWith("git@github.com:", StringComparison.OrdinalIgnoreCase))
+        {
+            var path = text["git@github.com:".Length..].TrimEnd('/');
+            if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase)) path = path[..^4];
+            if (!Regex.IsMatch(path, @"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) return false;
+            remoteUrl = $"git@github.com:{path}.git";
+            webUrl = new Uri("https://github.com/" + path);
+            return true;
+        }
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
+            !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrEmpty(uri.UserInfo)) return false;
+        var repositoryPath = Uri.UnescapeDataString(uri.AbsolutePath).Trim('/');
+        if (repositoryPath.EndsWith(".git", StringComparison.OrdinalIgnoreCase)) repositoryPath = repositoryPath[..^4];
+        if (!Regex.IsMatch(repositoryPath, @"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) return false;
+        webUrl = new Uri("https://github.com/" + repositoryPath);
+        remoteUrl = webUrl.AbsoluteUri.TrimEnd('/') + ".git";
+        return true;
+    }
 
     private async void GitBranch_Click(object sender, RoutedEventArgs e)
     {

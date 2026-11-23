@@ -48,10 +48,8 @@ public partial class MainWindow
 
                 if (change.Deleted || !File.Exists(item.Key))
                 {
-                    MessageBox.Show(this,
-                        $"Le fichier « {document.Name} » a été supprimé ou renommé sur le disque. Le contenu de l’éditeur est conservé{(document.IsDirty ? " (avec des modifications non enregistrées)" : "")}.",
-                        "Fichier supprimé à l’extérieur", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    continue;
+                    document.HasExternalConflict = true;
+                    StatusMessage.Text = "Fichier supprimé hors de l’éditeur : " + document.Name + ". Le buffer est conservé.";
                 }
 
                 try
@@ -61,38 +59,15 @@ public partial class MainWindow
                         StatusMessage.Text = $"Changement externe ignoré pour {document.Name} (fichier supérieur à 20 Mo).";
                         continue;
                     }
-                    var (diskText, diskEncoding) = await ReadTextFileAsync(item.Key);
+                    var (diskText, _) = await ReadTextFileAsync(item.Key);
                     if (string.Equals(diskText, document.Text, StringComparison.Ordinal)) continue;
 
-                    var decision = new ExternalFileChangeWindow(document.Name, document.Path, document.Text, diskText, document.IsDirty)
-                    {
-                        Owner = this
-                    }.ShowDialog();
-                    if (decision == true)
-                    {
-                        document.Text = diskText;
-                        document.EncodingId = diskEncoding;
-                        document.LineEnding = diskText.Contains("\r\n", StringComparison.Ordinal) ? "\r\n"
-                            : diskText.Contains('\r') ? "\r" : "\n";
-                        document.IsDirty = false;
-                        RefreshTabs();
-                        if (ReferenceEquals(document, _activeDocument))
-                        {
-                            await SendDocumentAsync(document, replaceEditorText: true);
-                            UpdateFileStatus(document);
-                        }
-                        if (_languageServer is not null && _lspDocumentUris.TryGetValue(document.Id, out var uri))
-                            try { await _languageServer.ChangeDocumentAsync(uri, document.Text); }
-                            catch (Exception ex) { OutputPanel.AppendText("[LSP] Synchronisation du rechargement : " + ex.Message + Environment.NewLine); }
-                        StatusMessage.Text = $"Rechargé depuis le disque : {document.Name}";
-                    }
-                    else
-                    {
-                        // Mark the divergence so a later save requires an explicit user action.
-                        document.IsDirty = true;
-                        RefreshTabs();
-                        StatusMessage.Text = $"Conflit externe conservé dans l’éditeur : {document.Name}. Enregistrer remplacera la version sur disque.";
-                    }
+                    // Never replace a live editor model from a watcher event. Keep its contents and
+                    // let the user decide at the next save, avoiding modal dialogs and lost keystrokes.
+                    var firstConflict = !document.HasExternalConflict;
+                    document.HasExternalConflict = true;
+                    if (firstConflict)
+                        StatusMessage.Text = $"{document.Name} a changé sur le disque. Le buffer est conservé; Enregistrer demandera confirmation avant écrasement.";
                 }
                 catch (IOException)
                 {

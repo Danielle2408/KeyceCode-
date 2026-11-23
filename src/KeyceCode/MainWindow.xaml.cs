@@ -1006,6 +1006,7 @@ public partial class MainWindow : Window
         public string LineEnding { get; set; } = Environment.NewLine;
         public string Name => Alias ?? System.IO.Path.GetFileName(Path);
         public bool IsDirty { get; set; }
+        public bool HasExternalConflict { get; set; }
         public bool IsPreview { get; set; }
     }
 

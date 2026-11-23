@@ -50,6 +50,36 @@ public partial class MainWindow
         finally { InstallExtensionButton.IsEnabled = true; }
     }
 
+    private async void InstallGalleryExtension_Click(object sender, RoutedEventArgs e)
+    {
+        if (ExtensionResults.SelectedItem is not GalleryExtension extension) return;
+        InstallGalleryExtensionButton.IsEnabled = false;
+        DownloadExtensionButton.IsEnabled = false;
+        ExtensionGalleryStatus.Text = $"Téléchargement de {extension.Identity}…";
+        string? packagePath = null;
+        try
+        {
+            packagePath = await _extensionGallery.DownloadAsync(extension);
+            ExtensionGalleryStatus.Text = "VSIX téléchargé. Vérification et installation…";
+            var installed = await _vsixExtensions.InstallAsync(packagePath);
+            RefreshInstalledExtensions();
+            ExtensionGalleryStatus.Text = $"{installed.Id}@{installed.Version} installé localement. Son code reste inactif dans KeyceCode.";
+            ExtensionDetails.Text += $"\n\nInstallé dans : {installed.Path}";
+            StatusMessage.Text = $"Extension téléchargée et installée (inactive) : {installed.Id}";
+        }
+        catch (Exception ex)
+        {
+            ExtensionGalleryStatus.Text = "Téléchargement ou installation impossible.";
+            ExtensionDetails.Text += "\n\n" + ex.Message;
+        }
+        finally
+        {
+            InstallGalleryExtensionButton.IsEnabled = ExtensionResults.SelectedItem is GalleryExtension;
+            DownloadExtensionButton.IsEnabled = ExtensionResults.SelectedItem is GalleryExtension;
+            if (packagePath is not null) ExtensionDetails.Text += $"\nPaquet : {packagePath}";
+        }
+    }
+
     private async void ImportVsCodeExtensions_Click(object sender, RoutedEventArgs e)
     {
         var source = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".vscode", "extensions");
@@ -119,6 +149,7 @@ public partial class MainWindow
     {
         if (ExtensionResults.SelectedItem is not GalleryExtension extension)
         {
+            InstallGalleryExtensionButton.IsEnabled = false;
             DownloadExtensionButton.IsEnabled = false;
             return;
         }
@@ -126,6 +157,7 @@ public partial class MainWindow
         var rating = extension.Rating is { } value ? $" · note {value:0.0}/5" : string.Empty;
         ExtensionDetails.Text = $"{extension.DisplayName}\n{extension.Identity}\n{verification}{rating}\n{extension.Description}";
         DownloadExtensionButton.IsEnabled = true;
+        InstallGalleryExtensionButton.IsEnabled = true;
     }
 
     private async void DownloadExtension_Click(object sender, RoutedEventArgs e)
