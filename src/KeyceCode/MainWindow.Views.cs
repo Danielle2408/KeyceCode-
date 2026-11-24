@@ -289,7 +289,7 @@ public partial class MainWindow
     {
         var themeService = ((App)Application.Current).ThemeService;
         var credentialStore = new GeminiCredentialStore();
-        var settings = new SettingsWindow(_editorPreferences, themeService.Themes, themeService.CurrentThemeId, credentialStore.HasStoredKey, _gemini.Model) { Owner = this };
+        var settings = new SettingsWindow(_editorPreferences, themeService.Themes, themeService.CurrentThemeId, credentialStore.HasStoredKey, credentialStore.HasStoredSecondaryKey, _gemini.Model) { Owner = this };
         if (settings.ShowDialog() != true) return;
         var languageServerConfigurationChanged =
             !string.Equals(_editorPreferences.LanguageServerExecutable, settings.Preferences.LanguageServerExecutable, StringComparison.Ordinal) ||
@@ -304,6 +304,8 @@ public partial class MainWindow
         {
             if (settings.ClearGeminiApiKey) credentialStore.Delete();
             else if (settings.GeminiApiKey is { } apiKey) credentialStore.Save(apiKey);
+            if (settings.ClearGeminiSecondaryApiKey) credentialStore.DeleteSecondary();
+            else if (settings.GeminiSecondaryApiKey is { } secondaryApiKey) credentialStore.SaveSecondary(secondaryApiKey);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         {
@@ -526,10 +528,12 @@ internal sealed class SettingsWindow : Window
     private readonly ComboBox _theme = new();
     private readonly TextBox _search = new();
     private readonly PasswordBox _geminiKey = new();
+    private readonly PasswordBox _geminiSecondaryKey = new();
     private readonly TextBox _geminiModel = new();
     private readonly TextBox _languageServerExecutable = new();
     private readonly TextBox _languageServerArguments = new();
     private readonly CheckBox _clearGeminiKey = new();
+    private readonly CheckBox _clearGeminiSecondaryKey = new();
     private readonly Button _testGemini = new() { Content = "Tester la connexion Gemini", MinWidth = 180, HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TextBlock _geminiTestStatus = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 6, 4, 0) };
     private readonly Button _installRoslynLsp = new() { Content = "Installer l’IntelliSense C# (Roslyn)", MinWidth = 230, HorizontalAlignment = HorizontalAlignment.Left };
@@ -539,8 +543,10 @@ internal sealed class SettingsWindow : Window
     public string? SelectedThemeId => _theme.SelectedValue as string;
     public string? GeminiApiKey => string.IsNullOrWhiteSpace(_geminiKey.Password) ? null : _geminiKey.Password;
     public bool ClearGeminiApiKey => _clearGeminiKey.IsChecked == true;
+    public string? GeminiSecondaryApiKey => string.IsNullOrWhiteSpace(_geminiSecondaryKey.Password) ? null : _geminiSecondaryKey.Password;
+    public bool ClearGeminiSecondaryApiKey => _clearGeminiSecondaryKey.IsChecked == true;
 
-    public SettingsWindow(EditorPreferences initial, IReadOnlyList<ThemeDefinition> themes, string themeId, bool hasGeminiKey, string currentGeminiModel)
+    public SettingsWindow(EditorPreferences initial, IReadOnlyList<ThemeDefinition> themes, string themeId, bool hasGeminiKey, bool hasGeminiSecondaryKey, string currentGeminiModel)
     {
         Title = "Paramètres — KeyceCode"; Width = 720; Height = 700; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         SetResourceReference(BackgroundProperty, "WindowBackground");
@@ -608,6 +614,13 @@ internal sealed class SettingsWindow : Window
         _geminiModel.Text = initial.GeminiModel ?? currentGeminiModel;
         _geminiModel.ToolTip = "Identifiant de modèle Gemini Developer API (par défaut : gemini-3.5-flash-lite)";
         content.Children.Add(Row("Modèle Gemini", _geminiModel));
+        var diagnosticHelp = new TextBlock
+        {
+            Text = "KeyceIA vérifie automatiquement le fichier actif après une courte pause de frappe. Seul ce fichier (jusqu’à 24 000 caractères) est envoyé à Gemini. Les erreurs probables apparaissent en rouge et les avertissements en jaune dans la marge; survolez le point pour lire une phrase.",
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 2, 2, 8), Tag = "Diagnostic automatique erreurs IA Gemini ligne"
+        };
+        diagnosticHelp.SetResourceReference(ForegroundProperty, "MutedBrush");
+        content.Children.Add(diagnosticHelp);
         _geminiInlineCompletion.Content = "Activer les suggestions Gemini inline pendant la frappe";
         _geminiInlineCompletion.IsChecked = initial.GeminiInlineCompletionEnabled;
         content.Children.Add(Row("Autocomplétion Gemini", _geminiInlineCompletion));
@@ -626,6 +639,17 @@ internal sealed class SettingsWindow : Window
         content.Children.Add(keyHelp);
         _geminiKey.ToolTip = "Clé API Gemini (la valeur enregistrée n’est jamais affichée)";
         content.Children.Add(Row("Clé API Gemini", _geminiKey));
+        _geminiSecondaryKey.ToolTip = "Clé Gemini secondaire chiffrée; utilisée si la clé principale est limitée par son quota";
+        content.Children.Add(Row("Deuxième clé API Gemini (optionnelle)", _geminiSecondaryKey));
+        var secondaryHelp = new TextBlock { Text = hasGeminiSecondaryKey
+            ? "Une deuxième clé est enregistrée de manière chiffrée. Elle prend le relais automatiquement si Google signale une limite de quota sur la première. Saisissez une nouvelle clé pour la remplacer."
+            : "Cette clé reste chiffrée dans votre compte Windows et prend le relais automatiquement si la première atteint sa limite de quota.",
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 4, 2, 8) };
+        secondaryHelp.SetResourceReference(ForegroundProperty, "MutedBrush");
+        content.Children.Add(secondaryHelp);
+        _clearGeminiSecondaryKey.Content = "Supprimer la deuxième clé enregistrée";
+        _clearGeminiSecondaryKey.Margin = new Thickness(2, 3, 2, 0);
+        content.Children.Add(_clearGeminiSecondaryKey);
         _testGemini.Click += TestGemini_Click;
         var testPanel = new StackPanel { Margin = new Thickness(0, 6, 0, 8), Tag = "Test connexion Gemini modèle quota" };
         testPanel.Children.Add(_testGemini);

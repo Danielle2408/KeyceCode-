@@ -33,5 +33,11 @@ body { color: var(--editor-fg); font-family: "Segoe UI", sans-serif; }
 .monaco-editor .glyph-margin .keyce-breakpoint-glyph:hover {
   background: radial-gradient(circle at center, #ff6b6b 0 6px, transparent 6.6px);
 }
+.monaco-editor .glyph-margin .keyce-ai-error-glyph {
+  background: radial-gradient(circle at center, #f44747 0 4px, transparent 4.8px);
+}
+.monaco-editor .glyph-margin .keyce-ai-warning-glyph {
+  background: radial-gradient(circle at center, #e5c07b 0 4px, transparent 4.8px);
+}
 .monaco-editor .cursor { border-left-width: 2px !important; }
 .monaco-editor .scroll-decoration { box-shadow: 0 6px 6px -6px rgba(0, 0, 0, .45); }

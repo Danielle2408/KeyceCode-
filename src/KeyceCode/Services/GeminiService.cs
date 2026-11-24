@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -69,6 +70,40 @@ public sealed class GeminiService : IDisposable
             cancellationToken, preserveWhitespace: true);
     }
 
+    /// <summary>Reviews one editor buffer and returns concise, line-based findings.</summary>
+    public async Task<IReadOnlyList<GeminiCodeFinding>> AnalyzeCodeAsync(string source, string? language = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(source)) return Array.Empty<GeminiCodeFinding>();
+        var code = source.Length > 24000 ? source[..24000] : source;
+        var reply = await GenerateAsync(
+            "Analyse ce code pour les erreurs probables de syntaxe ou de logique évidentes. " +
+            "Réponds uniquement avec un tableau JSON, sans Markdown. Chaque élément contient line (numéro à partir de 1), " +
+            "severity (error ou warning), message (une seule phrase courte en français). N'invente pas de problème. " +
+            "Maximum 12 problèmes. Exemple : [{\"line\":3,\"severity\":\"error\",\"message\":\"Cette parenthèse n’est pas fermée.\"}]\n" +
+            $"Langage : {language ?? "inconnu"}.\nCode :\n{code}", cancellationToken);
+        var start = reply.IndexOf('[');
+        var end = reply.LastIndexOf(']');
+        if (start < 0 || end < start) return Array.Empty<GeminiCodeFinding>();
+        using var json = JsonDocument.Parse(reply[start..(end + 1)]);
+        var lineCount = source.Count(c => c == '\n') + 1;
+        var findings = new List<GeminiCodeFinding>();
+        foreach (var item in json.RootElement.EnumerateArray())
+        {
+            if (!item.TryGetProperty("line", out var lineElement) || !lineElement.TryGetInt32(out var line) || line < 1 || line > lineCount) continue;
+            var severity = item.TryGetProperty("severity", out var severityElement) ? severityElement.GetString() : "warning";
+            var message = item.TryGetProperty("message", out var messageElement) ? messageElement.GetString()?.Replace('\n', ' ').Trim() : null;
+            if (string.IsNullOrWhiteSpace(message)) continue;
+            var sentenceEnd = message.IndexOfAny(['.', '!', '?']);
+            if (sentenceEnd >= 0) message = message[..(sentenceEnd + 1)];
+            if (message.Length > 180) message = message[..177] + "…";
+            else if (!message.EndsWith('.') && !message.EndsWith('!') && !message.EndsWith('?')) message += ".";
+            findings.Add(new GeminiCodeFinding(line, severity?.Equals("error", StringComparison.OrdinalIgnoreCase) == true ? "error" : "warning", message));
+            if (findings.Count == 12) break;
+        }
+        return findings;
+    }
+
     /// <summary>Asks Gemini for a complete replacement document, suitable for review before applying.</summary>
     public Task<string> EditDocumentAsync(string instruction, string source, string? language = null,
         CancellationToken cancellationToken = default)
@@ -87,8 +122,11 @@ public sealed class GeminiService : IDisposable
 
     private async Task<string> GenerateAsync(string prompt, CancellationToken cancellationToken, bool preserveWhitespace = false)
     {
-        var apiKey = _explicitApiKey ?? _credentialStore.Read() ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY");
-        if (string.IsNullOrWhiteSpace(apiKey))
+        var apiKeys = (_explicitApiKey is not null
+                ? new[] { _explicitApiKey, _credentialStore.ReadSecondary() }
+                : new[] { _credentialStore.Read(), _credentialStore.ReadSecondary(), Environment.GetEnvironmentVariable("GEMINI_API_KEY") })
+            .Where(key => !string.IsNullOrWhiteSpace(key)).Select(key => key!.Trim()).Distinct(StringComparer.Ordinal).ToArray();
+        if (apiKeys.Length == 0)
             throw new InvalidOperationException(
                 "Clé Gemini absente. Définissez GEMINI_API_KEY ou fournissez une clé depuis les paramètres sécurisés de l'application.");
 
@@ -107,13 +145,14 @@ public sealed class GeminiService : IDisposable
         };
 
         string body;
+        var keyIndex = 0;
         for (var attempt = 0; ; attempt++)
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(ApiRoot, relativeUrl))
             {
                 Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
             };
-            request.Headers.Add("x-goog-api-key", apiKey);
+            request.Headers.Add("x-goog-api-key", apiKeys[keyIndex]);
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
             body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
@@ -122,6 +161,11 @@ public sealed class GeminiService : IDisposable
             var transient = response.StatusCode is System.Net.HttpStatusCode.ServiceUnavailable or
                 System.Net.HttpStatusCode.BadGateway or System.Net.HttpStatusCode.GatewayTimeout;
             var rateLimited = response.StatusCode == System.Net.HttpStatusCode.TooManyRequests;
+            if (rateLimited && keyIndex + 1 < apiKeys.Length)
+            {
+                keyIndex++;
+                continue;
+            }
             var retryLimit = transient ? 2 : rateLimited ? 1 : 0;
             if (attempt < retryLimit)
             {
@@ -213,3 +257,5 @@ public sealed class GeminiService : IDisposable
         if (_ownsClient) _http.Dispose();
     }
 }
+
+public sealed record GeminiCodeFinding(int Line, string Severity, string Message);

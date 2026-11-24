@@ -17,6 +17,8 @@
   const modelPathsByUri = new Map();
   const modelIdsByUri = new Map();
   const documentMarkers = new Map();
+  const geminiDocumentDiagnostics = new Map();
+  const geminiDecorations = new WeakMap();
   const pendingCompletions = new Map();
   const pendingNavigation = new Map();
   const pendingRefactorRequests = new Map();
@@ -56,6 +58,7 @@
     const doc = documentForModel(model);
     if (doc?.id) {
       activeDocument = { ...doc, version: model.getVersionId() };
+      applyGeminiDiagnostics(model, geminiDocumentDiagnostics.get(doc.id) || []);
       post({ type: "activePaneChanged", id: doc.id });
     }
     document.querySelectorAll(".editor-pane").forEach((node, index) => node.classList.toggle("active", index === pane));
@@ -80,6 +83,27 @@
       });
     }, 90);
     contentTimers.set(doc.id, timer);
+  }
+
+  function applyGeminiDiagnostics(model, diagnostics) {
+    if (!model || model.isDisposed()) return;
+    const markers = diagnostics.map(item => {
+      const line = Math.max(1, Math.min(model.getLineCount(), Number(item.line) || 1));
+      const message = String(item.message || "Problème détecté.").replace(/[\r\n]+/g, " ").trim();
+      return { severity: item.severity === "error" ? monacoApi.MarkerSeverity.Error : monacoApi.MarkerSeverity.Warning,
+        message, startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: Math.max(2, model.getLineMaxColumn(line)), source: "KeyceIA" };
+    });
+    monacoApi.editor.setModelMarkers(model, "keycecode-gemini", markers);
+    const previous = geminiDecorations.get(model) || [];
+    const next = diagnostics.map(item => {
+      const line = Math.max(1, Math.min(model.getLineCount(), Number(item.line) || 1));
+      return { range: new monacoApi.Range(line, 1, line, 1), options: {
+        isWholeLine: false,
+        glyphMarginClassName: item.severity === "error" ? "keyce-ai-error-glyph" : "keyce-ai-warning-glyph",
+        glyphMarginHoverMessage: { value: String(item.message || "Problème détecté.").replace(/[\r\n]+/g, " ").trim() }
+      } };
+    });
+    geminiDecorations.set(model, editor.deltaDecorations(previous, next));
   }
 
   function setBreakpointLines(model, lines) {
@@ -117,7 +141,16 @@
         { token: "comment", foreground: "6A9955", fontStyle: "italic" },
         { token: "string", foreground: "CE9178" },
         { token: "keyword", foreground: "C586C0" },
+        { token: "keyword.control", foreground: "C586C0" },
+        { token: "keyword.operator", foreground: "D4D4D4" },
+        { token: "type", foreground: "4EC9B0" },
+        { token: "identifier", foreground: "9CDCFE" },
         { token: "number", foreground: "B5CEA8" },
+        { token: "constant", foreground: "4FC1FF" },
+        { token: "regexp", foreground: "D16969" },
+        { token: "tag", foreground: "569CD6" },
+        { token: "attribute.name", foreground: "9CDCFE" },
+        { token: "attribute.value", foreground: "CE9178" },
         { token: "type.identifier", foreground: "4EC9B0" }
       ],
       colors: {
@@ -150,7 +183,16 @@
         { token: "comment", foreground: "8190B3", fontStyle: "italic" },
         { token: "string", foreground: "F5A97F" },
         { token: "keyword", foreground: "C792EA" },
+        { token: "keyword.control", foreground: "C792EA" },
+        { token: "keyword.operator", foreground: "C792EA" },
+        { token: "type", foreground: "79D4C8" },
+        { token: "identifier", foreground: "E8EDF8" },
         { token: "number", foreground: "F9C66D" },
+        { token: "constant", foreground: "FFCB6B" },
+        { token: "regexp", foreground: "F07178" },
+        { token: "tag", foreground: "82AAFF" },
+        { token: "attribute.name", foreground: "C3E88D" },
+        { token: "attribute.value", foreground: "F5A97F" },
         { token: "type.identifier", foreground: "79D4C8" },
         { token: "function", foreground: "82AAFF" }
       ],
@@ -553,7 +595,7 @@
   function languageForPath(path) {
     const extension = String(path).split(".").pop()?.toLowerCase();
     return ({
-      cs: "csharp", js: "javascript", jsx: "javascriptreact", ts: "typescript", tsx: "typescriptreact",
+      cs: "csharp", c: "cpp", h: "cpp", cc: "cpp", cxx: "cpp", cpp: "cpp", hpp: "cpp", hxx: "cpp", js: "javascript", jsx: "javascriptreact", ts: "typescript", tsx: "typescriptreact",
       json: "json", jsonc: "jsonc", html: "html", htm: "html", css: "css", scss: "scss",
       py: "python", php: "php", php4: "php", php5: "php", phtml: "php", ctp: "php",
       ps1: "powershell", go: "go", rs: "rust", java: "java", cpp: "cpp", cc: "cpp", h: "cpp", hpp: "cpp"
@@ -592,6 +634,7 @@
         path: message.path || null,
         version: model.getVersionId()
       };
+      applyGeminiDiagnostics(model, geminiDocumentDiagnostics.get(id) || []);
       if (message.options) editor.updateOptions(message.options);
       if (message.theme) monaco.editor.setTheme(message.theme);
       monaco.editor.setModelMarkers(model, "keycecode-lsp", documentMarkers.get(id) || []);
@@ -824,6 +867,14 @@
           documentMarkers.set(message.id, markers);
           const model = editor?.getModel();
           if (model && activeDocument.id === message.id) monacoApi.editor.setModelMarkers(model, "keycecode-lsp", markers);
+          break;
+        }
+        case "setGeminiDiagnostics": {
+          if (typeof message.id !== "string") break;
+          const diagnostics = Array.isArray(message.diagnostics) ? message.diagnostics : [];
+          geminiDocumentDiagnostics.set(message.id, diagnostics);
+          const model = editor?.getModel();
+          if (model && activeDocument.id === message.id) applyGeminiDiagnostics(model, diagnostics);
           break;
         }
         case "lspCompletionResult": {

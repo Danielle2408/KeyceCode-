@@ -33,6 +33,8 @@ public partial class MainWindow : Window
     private bool _terminalReady;
     private readonly Dictionary<string, CancellationTokenSource> _lspNavigationRequests = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CancellationTokenSource> _geminiInlineRequests = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CancellationTokenSource> _geminiDiagnosticRequests = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<GeminiCodeFinding>> _geminiDiagnostics = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (int Version, int Offset)> _editorSnapshots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TaskCompletionSource<string?>> _pendingFormatOnSave = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TaskCompletionSource<bool>> _pendingAiEdits = new(StringComparer.Ordinal);
@@ -706,6 +708,9 @@ public partial class MainWindow : Window
                     var offset = _editorSnapshots.TryGetValue(doc.Id, out var snapshot) ? snapshot.Offset : 0;
                     _editorSnapshots[doc.Id] = (version, Math.Min(offset, doc.Text.Length));
                     CancelInlineRequestsForDocument(doc.Id);
+                    _geminiDiagnostics.Remove(doc.Id);
+                    await SendGeminiDiagnosticsAsync(doc, Array.Empty<GeminiCodeFinding>());
+                    ScheduleGeminiDiagnostics(doc);
                     doc.IsDirty = true;
                     RefreshTabs();
                     if (_languageServer is not null && _lspDocumentUris.TryGetValue(doc.Id, out var lspUri))
@@ -732,6 +737,7 @@ public partial class MainWindow : Window
                     StatusLanguage.Content = document.Language;
                     RefreshTabs();
                     UpdateFileStatus(document);
+                    if (_geminiDiagnostics.TryGetValue(document.Id, out var findings)) await SendGeminiDiagnosticsAsync(document, findings);
                 }
             }
             else if (type == "geminiInlineCompletionRequest") await HandleGeminiInlineCompletionRequestAsync(root);
@@ -802,6 +808,50 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) { OutputPanel.AppendText("Message éditeur invalide : " + ex.Message + Environment.NewLine); }
     }
+
+    private void ScheduleGeminiDiagnostics(EditorDocument document)
+    {
+        if (!ReferenceEquals(document, _activeDocument) || string.IsNullOrWhiteSpace(document.Path)) return;
+        if (_geminiDiagnosticRequests.Remove(document.Id, out var previous)) previous.Cancel();
+        var cancellation = new CancellationTokenSource();
+        _geminiDiagnosticRequests[document.Id] = cancellation;
+        var text = document.Text;
+        var version = _editorSnapshots.TryGetValue(document.Id, out var snapshot) ? snapshot.Version : 0;
+        _ = AnalyzeAfterPauseAsync(document, text, version, cancellation);
+    }
+
+    private async Task AnalyzeAfterPauseAsync(EditorDocument document, string text, int version, CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await Task.Delay(1700, cancellation.Token);
+            var store = new GeminiCredentialStore();
+            if (!store.HasStoredKey && !store.HasStoredSecondaryKey && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GEMINI_API_KEY"))) return;
+            if (string.IsNullOrWhiteSpace(text) || text.Length > 24000) return;
+            var findings = await _gemini.AnalyzeCodeAsync(text, document.Language, cancellation.Token);
+            await Dispatcher.InvokeAsync(async () =>
+            {
+                if (cancellation.IsCancellationRequested || !ReferenceEquals(document, _activeDocument) ||
+                    !_editorSnapshots.TryGetValue(document.Id, out var latest) || latest.Version != version) return;
+                _geminiDiagnostics[document.Id] = findings;
+                await SendGeminiDiagnosticsAsync(document, findings);
+            });
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is System.Net.Http.HttpRequestException or InvalidOperationException or JsonException)
+        {
+            await Dispatcher.InvokeAsync(() => StatusMessage.Text = "Vérification IA indisponible : " + ex.Message);
+        }
+        finally
+        {
+            if (_geminiDiagnosticRequests.TryGetValue(document.Id, out var current) && ReferenceEquals(current, cancellation))
+                _geminiDiagnosticRequests.Remove(document.Id);
+            cancellation.Dispose();
+        }
+    }
+
+    private Task SendGeminiDiagnosticsAsync(EditorDocument document, IReadOnlyList<GeminiCodeFinding> findings) =>
+        PostEditorMessageAsync(new { type = "setGeminiDiagnostics", id = document.Id, diagnostics = findings.Select(f => new { line = f.Line, severity = f.Severity, message = f.Message }) });
 
     private async void AutoSaveTimer_Tick(object? sender, EventArgs e)
     {
@@ -958,6 +1008,7 @@ public partial class MainWindow : Window
         await PostEditorMessageAsync(new { type = "setDocument", id = document.Id, path = document.Path, text = document.Text, language = document.Language, replaceText = replaceEditorText, breakpoints = breakpointLines });
         await EnsureLspDocumentAsync(document);
         UpdateFileStatus(document);
+        ScheduleGeminiDiagnostics(document);
     }
 
     private void UpdateFileStatus(EditorDocument document)
