@@ -72,14 +72,23 @@ public partial class MainWindow
         StatusMessage.Text = "Historique des dossiers récents effacé";
     }
 
-    private async Task RefreshExplorerAsync()
+    private async Task RefreshExplorerAsync(string? expandPath = null, string? selectPath = null)
     {
         if (_workspace is null) return;
         var expanded = ExplorerTree.Items.Cast<TreeViewItem>().SelectMany(FlattenTreeItems)
             .Where(item => item.IsExpanded && item.Tag is WorkspaceEntry)
             .Select(item => ((WorkspaceEntry)item.Tag).FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(expandPath)) expanded.Add(Path.GetFullPath(expandPath));
+        if (!string.IsNullOrWhiteSpace(selectPath)) expanded.Add(Path.GetFullPath(selectPath));
         ExplorerTree.Items.Clear();
         foreach (var entry in await _workspace.GetEntriesAsync()) ExplorerTree.Items.Add(CreateTreeItem(entry, expanded));
+        if (!string.IsNullOrWhiteSpace(selectPath))
+        {
+            var selectedPath = Path.GetFullPath(selectPath);
+            var selectedNode = ExplorerTree.Items.Cast<TreeViewItem>().SelectMany(FlattenTreeItems)
+                .FirstOrDefault(item => item.Tag is WorkspaceEntry entry && string.Equals(entry.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase));
+            if (selectedNode is not null) { selectedNode.IsSelected = true; selectedNode.BringIntoView(); }
+        }
     }
 
     private static IEnumerable<TreeViewItem> FlattenTreeItems(TreeViewItem item)
@@ -128,15 +137,16 @@ public partial class MainWindow
         var parent = GetExplorerParent(selected);
         if (parent is null) return;
         var kind = directory ? "dossier" : "fichier";
-        var name = QuickPickWindow.Prompt(this, $"Nouveau {kind}", $"Nom du {kind}");
+        var name = QuickPickWindow.Prompt(this, $"Nouveau {kind}", $"Nom du {kind}", confirmLabel: "Créer");
         if (string.IsNullOrWhiteSpace(name)) return;
         try
         {
-            var relativePath = Path.GetRelativePath(_workspace.RootPath, Path.Combine(parent, name.Trim()));
+            var normalizedName = name.Trim();
+            var relativePath = Path.GetRelativePath(_workspace.RootPath, Path.Combine(parent, normalizedName));
             var path = directory ? _workspace.CreateDirectory(relativePath) : _workspace.CreateFile(relativePath);
-            await RefreshExplorerAsync();
+            await RefreshExplorerAsync(expandPath: parent, selectPath: directory ? path : null);
             if (!directory) await OpenDocumentAsync(path, pin: true);
-            else StatusMessage.Text = $"Dossier créé : {name}";
+            else StatusMessage.Text = $"Dossier créé : {normalizedName}";
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -192,7 +202,7 @@ public partial class MainWindow
             StatusMessage.Text = "Fermez d’abord les éditeurs ouverts dans ce dossier, puis réessayez.";
             return;
         }
-        var name = QuickPickWindow.Prompt(this, "Renommer", "Nouveau nom", entry.Name);
+        var name = QuickPickWindow.Prompt(this, "Renommer", "Nouveau nom", entry.Name, "Renommer");
         if (string.IsNullOrWhiteSpace(name) || name.Trim() == entry.Name) return;
         try
         {
@@ -209,7 +219,7 @@ public partial class MainWindow
                 if (ReferenceEquals(document, _activeDocument)) await SendDocumentAsync(document);
                 StatusLanguage.Content = document.Language;
             }
-            await RefreshExplorerAsync();
+            await RefreshExplorerAsync(expandPath: Path.GetDirectoryName(newPath));
             RefreshTabs();
             StatusMessage.Text = $"Renommé : {name.Trim()}";
         }

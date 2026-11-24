@@ -447,7 +447,7 @@ internal sealed class QuickPickWindow : Window
 
     private void Search_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter) { AcceptSelection(); e.Handled = true; }
+        if (e.Key == Key.Enter && _list.SelectedItem is string) { AcceptSelection(); e.Handled = true; }
         else if (e.Key == Key.Escape) { DialogResult = false; e.Handled = true; }
         else if (e.Key == Key.Down) { _list.Focus(); e.Handled = true; }
     }
