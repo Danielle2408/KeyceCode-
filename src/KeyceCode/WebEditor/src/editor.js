@@ -21,6 +21,7 @@
   const pendingNavigation = new Map();
   const pendingRefactorRequests = new Map();
   const pendingAiCompletions = new Map();
+  const breakpointsByModel = new WeakMap();
   let completionSequence = 0;
   let aiCompletionEnabled = false;
   let userSnippets = [];
@@ -79,6 +80,31 @@
       });
     }, 90);
     contentTimers.set(doc.id, timer);
+  }
+
+  function setBreakpointLines(model, lines) {
+    if (!model || !monacoApi) return;
+    const state = breakpointsByModel.get(model) || { lines: new Set(), decorations: [] };
+    state.lines = new Set((Array.isArray(lines) ? lines : []).map(Number)
+      .filter((line) => Number.isInteger(line) && line > 0 && line <= model.getLineCount()));
+    state.decorations = model.deltaDecorations(state.decorations, [...state.lines].sort((a, b) => a - b).map((lineNumber) => ({
+      range: new monacoApi.Range(lineNumber, 1, lineNumber, 1),
+      options: { glyphMarginClassName: "keyce-breakpoint-glyph", glyphMarginHoverMessage: { value: "Point d’arrêt · F9 pour activer ou retirer" } }
+    })));
+    breakpointsByModel.set(model, state);
+  }
+
+  function toggleBreakpoint(source = editor, requestedLine = null) {
+    const model = source?.getModel();
+    const doc = documentForModel(model);
+    const line = Number(requestedLine || source?.getPosition()?.lineNumber || 0);
+    if (!model || !doc?.id || !line || line > model.getLineCount()) return;
+    const state = breakpointsByModel.get(model) || { lines: new Set(), decorations: [] };
+    const enabled = !state.lines.has(line);
+    if (enabled) state.lines.add(line);
+    else state.lines.delete(line);
+    setBreakpointLines(model, [...state.lines]);
+    post({ type: "breakpointToggled", id: doc.id, path: doc.path, line, enabled });
   }
 
   function initialize(monaco) {
@@ -155,6 +181,7 @@
       lineHeight: 21,
       fontLigatures: false,
       minimap: { enabled: true, side: "right", renderCharacters: false, maxColumn: 120 },
+      glyphMargin: true,
       lineNumbers: "on",
       renderLineHighlight: "all",
       renderWhitespace: "selection",
@@ -205,6 +232,7 @@
     editor.onDidFocusEditorWidget(() => activatePane(0));
 
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => requestSave());
+    editor.addCommand(monaco.KeyCode.F9, () => toggleBreakpoint(editor));
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => post({ type: "command", command: "find" }));
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH, () => post({ type: "command", command: "replace" }));
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, () => post({ type: "command", command: "quickOpen" }));
@@ -556,6 +584,7 @@
       modelPathsByUri.set(key, message.path || "");
       modelIdsByUri.set(key, id);
       editor.setModel(model);
+      setBreakpointLines(model, message.breakpoints);
       cancelAiCompletions();
       activeDocument = {
         id,
@@ -672,6 +701,7 @@
                 selectedText: model.getValueInRange(selection) });
             });
             secondaryEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyS, () => requestSave());
+            secondaryEditor.addCommand(monacoApi.KeyCode.F9, () => toggleBreakpoint(secondaryEditor));
             secondaryEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyF, () => post({ type: "command", command: "find" }));
             secondaryEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyH, () => post({ type: "command", command: "replace" }));
             secondaryEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyP, () => post({ type: "command", command: "quickOpen" }));
@@ -717,6 +747,7 @@
           break;
         }
         case "setDocument": setDocument(message); break;
+        case "toggleBreakpoint": toggleBreakpoint(editor); break;
         case "setTheme": monacoApi?.editor.setTheme(message.theme || "keyce-night"); break;
         case "setLanguage": {
           const model = editor?.getModel();

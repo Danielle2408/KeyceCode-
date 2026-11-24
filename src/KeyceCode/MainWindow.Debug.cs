@@ -9,11 +9,18 @@ namespace KeyceCode;
 public partial class MainWindow
 {
     private DapClient? _debugClient;
+    private readonly Dictionary<string, HashSet<int>> _editorBreakpoints = new(StringComparer.OrdinalIgnoreCase);
     private VsCodeLaunchConfiguration? _selectedDebugConfiguration;
     private string? _debugProgramPath;
     private string? _debugConfigurationRoot;
     private int _debugThreadId = 1;
     private TaskCompletionSource _debugInitialized = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private async void ToggleBreakpoint_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeDocument is null) { StatusMessage.Text = "Ouvrez un fichier avant de poser un point d’arrêt."; return; }
+        await PostEditorMessageAsync(new { type = "toggleBreakpoint" });
+    }
 
     private void DebugConfigurations_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -206,17 +213,61 @@ public partial class MainWindow
             AppendDebugText("[DAP] Aucun chemin de fichier cible; points d’arrêt ignorés.");
             return;
         }
-        var lines = DebugBreakpointLines.Text.Split([',', ';', ' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries)
-            .Select(value => int.TryParse(value, out var line) ? line : 0).Where(line => line > 0).Distinct().Order().ToArray();
+        var sources = _editorBreakpoints.ToDictionary(pair => pair.Key, pair => new HashSet<int>(pair.Value), StringComparer.OrdinalIgnoreCase);
+        var targetPath = Path.GetFullPath(_debugProgramPath);
+        if (!sources.TryGetValue(targetPath, out var targetLines)) sources[targetPath] = targetLines = [];
+        foreach (var line in ParseDebugBreakpointLines(DebugBreakpointLines.Text)) targetLines.Add(line);
+        foreach (var (path, lines) in sources)
+            await SendDebugBreakpointsAsync(client, path, lines);
+        AppendDebugText($"[DAP] Points d’arrêt chargés pour {sources.Count} fichier(s).");
+    }
+
+    private async Task SendDebugBreakpointsAsync(DapClient client, string path, IEnumerable<int> lines)
+    {
+        var orderedLines = lines.Where(line => line > 0).Distinct().Order().ToArray();
         var result = await client.RequestAsync("setBreakpoints", new
         {
-            source = new { name = Path.GetFileName(_debugProgramPath), path = _debugProgramPath },
-            breakpoints = lines.Select(line => new { line }).ToArray(),
+            source = new { name = Path.GetFileName(path), path },
+            breakpoints = orderedLines.Select(line => new { line }).ToArray(),
             sourceModified = false
         });
         var verified = result.TryGetProperty("breakpoints", out var items) && items.ValueKind == JsonValueKind.Array ? items.EnumerateArray().Count(item => item.TryGetProperty("verified", out var value) && value.ValueKind == JsonValueKind.True) : 0;
-        AppendDebugText($"[DAP] {verified}/{lines.Length} point(s) d’arrêt vérifié(s) sur {Path.GetFileName(_debugProgramPath)}.");
+        AppendDebugText($"[DAP] {verified}/{orderedLines.Length} point(s) d’arrêt vérifié(s) sur {Path.GetFileName(path)}.");
     }
+
+    private async Task HandleEditorBreakpointToggledAsync(JsonElement message)
+    {
+        var documentId = ReadString(message, "id");
+        var document = _documents.FirstOrDefault(item => item.Id == documentId);
+        var path = document?.Path;
+        var line = ReadInt(message, "line", 0);
+        var enabled = ReadBool(message, "enabled") == true;
+        if (string.IsNullOrWhiteSpace(path) || line <= 0) return;
+
+        path = Path.GetFullPath(path);
+        if (!_editorBreakpoints.TryGetValue(path, out var lines)) _editorBreakpoints[path] = lines = [];
+        if (enabled) lines.Add(line);
+        else lines.Remove(line);
+
+        var action = enabled ? "activé" : "retiré";
+        StatusMessage.Text = $"Point d’arrêt {action} · {Path.GetFileName(path)}:{line} (F9)";
+        if (_debugClient is { } client && _debugInitialized.Task.IsCompletedSuccessfully)
+        {
+            try { await SendDebugBreakpointsAsync(client, path, lines); }
+            catch (Exception ex) { AppendDebugText($"[DAP breakpoint] {ex.Message}"); }
+        }
+    }
+
+    private int[] GetEditorBreakpointLines(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return [];
+        return _editorBreakpoints.TryGetValue(Path.GetFullPath(path), out var lines) ? lines.Order().ToArray() : [];
+    }
+
+    private static IEnumerable<int> ParseDebugBreakpointLines(string text) =>
+        text.Split([',', ';', ' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(value => int.TryParse(value, out var line) ? line : 0)
+            .Where(line => line > 0).Distinct();
 
     private async Task ShowDebugStackAsync(DapClient client)
     {

@@ -26,5 +26,12 @@ body { color: var(--editor-fg); font-family: "Segoe UI", sans-serif; }
 .monaco-editor, .monaco-editor .overflow-guard { border-radius: 0; }
 .monaco-editor .margin { background-color: var(--editor-bg) !important; }
 .monaco-editor .line-numbers { color: var(--gutter) !important; }
+.monaco-editor .glyph-margin .keyce-breakpoint-glyph {
+  background: radial-gradient(circle at center, #f44747 0 5px, transparent 5.6px);
+  cursor: pointer;
+}
+.monaco-editor .glyph-margin .keyce-breakpoint-glyph:hover {
+  background: radial-gradient(circle at center, #ff6b6b 0 6px, transparent 6.6px);
+}
 .monaco-editor .cursor { border-left-width: 2px !important; }
 .monaco-editor .scroll-decoration { box-shadow: 0 6px 6px -6px rgba(0, 0, 0, .45); }

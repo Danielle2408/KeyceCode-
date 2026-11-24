@@ -739,6 +739,7 @@ public partial class MainWindow : Window
                 if (requestId is not null && _pendingAiEdits.TryGetValue(requestId, out var completion))
                     completion.TrySetResult(ReadBool(root, "success") == true);
             }
+            else if (type == "breakpointToggled") await HandleEditorBreakpointToggledAsync(root);
             else if (type == "cursorChanged")
             {
                 StatusCursor.Content = $"Ln {ReadInt(root, "line", 1)}, Col {ReadInt(root, "column", 1)}";
@@ -948,7 +949,10 @@ public partial class MainWindow : Window
 
     private async Task SendDocumentAsync(EditorDocument document, bool replaceEditorText = false)
     {
-        await PostEditorMessageAsync(new { type = "setDocument", id = document.Id, path = document.Path, text = document.Text, language = document.Language, replaceText = replaceEditorText });
+        var breakpointLines = !string.IsNullOrWhiteSpace(document.Path) &&
+            _editorBreakpoints.TryGetValue(Path.GetFullPath(document.Path), out var lines)
+                ? lines.Order().ToArray() : Array.Empty<int>();
+        await PostEditorMessageAsync(new { type = "setDocument", id = document.Id, path = document.Path, text = document.Text, language = document.Language, replaceText = replaceEditorText, breakpoints = breakpointLines });
         await EnsureLspDocumentAsync(document);
         UpdateFileStatus(document);
     }
