@@ -81,3 +81,9 @@ ConPTY requiert Windows 10 version 1809 (build 17763) ou Windows Server 2019. `C
 ## Dépôt distant
 
 `origin` pointe vers `https://github.com/Danielle2408/KeyceCode-.git`. Les changements sont publiés par jalons avec des commits explicites.
+
+## PHP et prévisualisation Web
+
+- **Build** lance `php -l` pour vérifier la syntaxe PHP; **Run** exécute le script PHP dans le terminal. PHP est un langage interprété : PHP doit être installé et `php.exe` doit être accessible dans le `PATH`.
+- Pour les projets statiques HTML/CSS, **Run** ou **Go Live** démarre le serveur local HTTP de KeyceCode et ouvre le navigateur. Les pages HTML servent les fichiers CSS, JavaScript, images et polices depuis le dossier du workspace; toute modification recharge automatiquement la page. HTML et CSS sont rendus par le navigateur, ils ne se compilent pas.
+- Un projet contenant `index.php` ou un fichier PHP actif utilise le serveur Web PHP (`php -S`); il faut installer PHP pour exécuter ces pages. Le serveur local est limité à `127.0.0.1` et s’arrête à la fermeture de KeyceCode ou via **Stop Live Server**.

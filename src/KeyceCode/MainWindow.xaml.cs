@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private readonly EditorPreferencesService _preferencesService = new();
     private readonly WorkspaceSessionService _sessionService = new();
     private readonly VsCodeSnippetService _snippetService = new();
+    private readonly LiveServerService _liveServer = new();
     private EditorPreferences _editorPreferences;
     private readonly List<EditorDocument> _documents = [];
     private readonly List<string> _navigationHistory = [];
@@ -60,6 +61,7 @@ public partial class MainWindow : Window
         FormatOnSaveMenuItem.IsChecked = _editorPreferences.FormatOnSave;
         _autoSaveTimer.Tick += AutoSaveTimer_Tick;
         OutputPanel.Text = "KeyceCode output\r\n";
+        _liveServer.OutputReceived += (_, line) => Dispatcher.BeginInvoke(() => OutputPanel.AppendText("[PHP Live Server] " + line + Environment.NewLine));
         SourceInitialized += (_, _) => AttachMaximizeWorkAreaHook();
         Loaded += MainWindow_Loaded;
         Closed += MainWindow_Closed;
@@ -78,6 +80,7 @@ public partial class MainWindow : Window
         _geminiInlineCompletionPauseTimer?.Stop();
         _terminalAiAnalysisCancellation?.Cancel();
         await StopDebugSessionAsync(terminateDebuggee: true);
+        await _liveServer.DisposeAsync();
         await StopTerminalSessionAsync();
         if (_extensionHost is not null)
         {

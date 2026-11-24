@@ -5,7 +5,7 @@ namespace KeyceCode.Services;
 
 public sealed record BuildOutputDiagnostic(string Severity, string Message, string File, int Line, int Column, string? Code);
 
-/// <summary>Extracts MSBuild, Roslyn, GCC, Clang, and MSVC diagnostics from streamed terminal text.</summary>
+/// <summary>Extracts MSBuild, Roslyn, GCC, Clang, MSVC, and PHP diagnostics from streamed terminal text.</summary>
 public sealed class BuildOutputDiagnosticParser
 {
     private const int MaximumLineLength = 8192;
@@ -16,6 +16,9 @@ public sealed class BuildOutputDiagnosticParser
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex GccDiagnosticLine = new(
         @"^(?<file>(?:[A-Za-z]:)?[^:]+):(?<line>\d+)(?::(?<column>\d+))?:\s*(?<severity>fatal error|error|warning|note):\s*(?<message>.*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex PhpDiagnosticLine = new(
+        @"^(?<severity>parse error|fatal error|warning|notice):\s*(?<message>.*?)\s+in\s+(?<file>.+?)\s+on line\s+(?<line>\d+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private readonly StringBuilder _line = new();
@@ -66,6 +69,7 @@ public sealed class BuildOutputDiagnosticParser
         var line = AnsiEscape.Replace(rawLine, string.Empty).Trim();
         var match = DiagnosticLine.Match(line);
         if (!match.Success) match = GccDiagnosticLine.Match(line);
+        if (!match.Success) match = PhpDiagnosticLine.Match(line);
         if (!match.Success ||
             !int.TryParse(match.Groups["line"].Value, out var lineNumber) ||
             !int.TryParse(match.Groups["column"].Success ? match.Groups["column"].Value : "1", out var column))
@@ -73,7 +77,7 @@ public sealed class BuildOutputDiagnosticParser
 
         var severity = match.Groups["severity"].Value.ToLowerInvariant() switch
         {
-            "error" or "fatal error" => "Error",
+            "error" or "fatal error" or "parse error" => "Error",
             "warning" => "Warning",
             _ => "Info"
         };

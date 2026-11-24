@@ -435,6 +435,17 @@ public partial class MainWindow
                 : $"{compile}; if ($LASTEXITCODE -eq 0) {{ & {Quote(output)} }}";
         }
         else if (extension == ".exe") command = isCmd ? QuoteCmd(path) : "& " + Quote(path);
+        else if (extension == ".php")
+        {
+            var php = FindPhpExecutable();
+            if (php is null) { ShowPhpMissing(); return; }
+            command = $"{QuotePath(php)} {QuotePath(path)}";
+        }
+        else if (extension is ".html" or ".htm" or ".css")
+        {
+            LiveServer_Click(sender, e);
+            return;
+        }
         else if (extension == ".py") command = $"python {QuotePath(path)}";
         else if (extension is ".js" or ".mjs") command = $"node {QuotePath(path)}";
         else if (extension == ".ps1") command = isCmd ? $"powershell.exe -ExecutionPolicy Bypass -File {QuoteCmd(path)}" : $"& {Quote(path)}";
@@ -471,6 +482,17 @@ public partial class MainWindow
         string command;
         var target = path;
         if (extension is ".sln" or ".slnx" or ".csproj") command = $"dotnet build {QuotePath(path)}";
+        else if (extension == ".php")
+        {
+            var php = FindPhpExecutable();
+            if (php is null) { ShowPhpMissing(); return; }
+            command = $"{QuotePath(php)} -l {QuotePath(path)}";
+        }
+        else if (extension is ".html" or ".htm" or ".css")
+        {
+            StatusMessage.Text = "HTML et CSS ne se compilent pas; utilise Run ou Go Live pour les prévisualiser dans le navigateur.";
+            return;
+        }
         else if (extension == ".cs")
         {
             var selection = SelectNearestProject(path, "Choisir le projet C# à compiler");
@@ -503,6 +525,89 @@ public partial class MainWindow
         var buildDirectory = Path.GetDirectoryName(buildTarget) ?? Path.GetDirectoryName(path)!;
         await RunInIntegratedTerminalAsync(command, buildDirectory,
             $"Compilation : {Path.GetFileName(buildTarget)}", captureBuildOutput: true);
+    }
+
+    private async void LiveServer_Click(object sender, RoutedEventArgs e)
+    {
+        if (_liveServer.IsRunning)
+        {
+            await _liveServer.StopAsync();
+            LiveServerButton.Content = "▷ Go Live";
+            StatusMessage.Text = "Live Server arrêté.";
+            return;
+        }
+        if (_activeDocument is not { } document || string.IsNullOrWhiteSpace(document.Path))
+        {
+            StatusMessage.Text = "Ouvre un fichier HTML, CSS ou PHP avant de démarrer Live Server.";
+            return;
+        }
+        if (document.IsDirty && !await SaveDocumentAsync(document)) return;
+
+        var activePath = Path.GetFullPath(document.Path);
+        var containingDirectory = Path.GetDirectoryName(activePath)!;
+        var root = _workspace is not null && IsInsideWorkspace(activePath, _workspace.RootPath)
+            ? Path.GetFullPath(_workspace.RootPath) : containingDirectory;
+        var extension = Path.GetExtension(activePath).ToLowerInvariant();
+        var defaultPhp = Path.Combine(root, "index.php");
+        var usePhp = extension == ".php" || File.Exists(defaultPhp);
+        string? entryFile = extension is ".html" or ".htm" ? activePath : null;
+
+        if (extension == ".css")
+        {
+            entryFile = new[] { "index.html", "index.htm" }.Select(name => Path.Combine(root, name)).FirstOrDefault(File.Exists)
+                ?? Directory.EnumerateFiles(root, "*.html", SearchOption.TopDirectoryOnly).OrderBy(path => path, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
+            if (entryFile is null && File.Exists(defaultPhp)) usePhp = true;
+            else if (entryFile is null)
+            {
+                StatusMessage.Text = "Aucune page HTML trouvée à prévisualiser dans ce dossier.";
+                return;
+            }
+        }
+        else if (extension is not (".html" or ".htm" or ".php"))
+        {
+            entryFile = new[] { "index.html", "index.htm" }.Select(name => Path.Combine(root, name)).FirstOrDefault(File.Exists);
+            if (entryFile is null && File.Exists(defaultPhp)) usePhp = true;
+            else if (entryFile is null)
+            {
+                StatusMessage.Text = "Ouvre une page HTML, CSS ou PHP avant de démarrer Live Server.";
+                return;
+            }
+        }
+
+        try
+        {
+            string url;
+            if (usePhp)
+            {
+                var php = FindPhpExecutable();
+                if (php is null) { ShowPhpMissing(); return; }
+                url = await _liveServer.StartPhpAsync(php, root, extension == ".php" ? activePath : entryFile);
+                ShowPanel("Output");
+                OutputPanel.AppendText($"PHP Live Server démarré : {url}\r\n");
+            }
+            else url = await _liveServer.StartAsync(root, entryFile);
+
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            LiveServerButton.Content = "■ Stop Live Server";
+            StatusMessage.Text = $"Live Server actif · {url}";
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception or UnauthorizedAccessException)
+        {
+            await _liveServer.StopAsync();
+            LiveServerButton.Content = "▷ Go Live";
+            StatusMessage.Text = "Démarrage de Live Server impossible.";
+            OutputPanel.AppendText("Live Server : " + ex.Message + Environment.NewLine);
+            ShowPanel("Output");
+        }
+    }
+
+    private static string? FindPhpExecutable() => FindExecutable("php.exe") ?? FindExecutable("php");
+
+    private void ShowPhpMissing()
+    {
+        StatusMessage.Text = "PHP introuvable.";
+        OutputPanel.AppendText("Pour exécuter ou vérifier un fichier PHP, installe PHP pour Windows et ajoute php.exe au PATH, puis redémarre KeyceCode.\r\n");
+        ShowPanel("Output");
     }
 
     private static string? FindNativeCompiler(bool cPlusPlus)
