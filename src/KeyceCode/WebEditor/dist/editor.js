@@ -555,7 +555,8 @@
     return ({
       cs: "csharp", js: "javascript", jsx: "javascriptreact", ts: "typescript", tsx: "typescriptreact",
       json: "json", jsonc: "jsonc", html: "html", htm: "html", css: "css", scss: "scss",
-      py: "python", ps1: "powershell", go: "go", rs: "rust", java: "java", cpp: "cpp", cc: "cpp", h: "cpp", hpp: "cpp"
+      py: "python", php: "php", php4: "php", php5: "php", phtml: "php", ctp: "php",
+      ps1: "powershell", go: "go", rs: "rust", java: "java", cpp: "cpp", cc: "cpp", h: "cpp", hpp: "cpp"
     })[extension] || "plaintext";
   }
 

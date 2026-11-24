@@ -601,12 +601,59 @@ public partial class MainWindow
         }
     }
 
-    private static string? FindPhpExecutable() => FindExecutable("php.exe") ?? FindExecutable("php");
+    private static string? FindPhpExecutable()
+    {
+        var roots = new List<string>();
+        foreach (var variable in new[] { "WAMP_DIR", "WAMP64", "WAMP" })
+            if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(variable)))
+                roots.Add(Environment.GetEnvironmentVariable(variable)!);
+        roots.AddRange([
+            @"C:\wamp64", @"C:\wamp",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Wamp64"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Wampserver"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Wamp")
+        ]);
+
+        foreach (var root in roots.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(root)) continue;
+            var phpRoot = Path.Combine(root, "bin", "php");
+            var configPath = Path.Combine(root, "wampmanager.conf");
+            if (File.Exists(configPath))
+            {
+                try
+                {
+                    var match = Regex.Match(File.ReadAllText(configPath), @"(?im)^\s*phpVersion\s*=\s*""(?<version>[^""]+)""", RegexOptions.CultureInvariant);
+                    if (match.Success)
+                    {
+                        var configured = Path.Combine(phpRoot, "php" + match.Groups["version"].Value, "php.exe");
+                        if (File.Exists(configured)) return configured;
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+
+            if (Directory.Exists(phpRoot))
+            {
+                try
+                {
+                    var installed = Directory.EnumerateDirectories(phpRoot, "php*")
+                        .OrderByDescending(directory => Version.TryParse(Path.GetFileName(directory).Length > 3 ? Path.GetFileName(directory)[3..] : "", out var version) ? version : new Version(0, 0))
+                        .Select(directory => Path.Combine(directory, "php.exe"))
+                        .FirstOrDefault(File.Exists);
+                    if (installed is not null) return installed;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+
+        return FindExecutable("php.exe") ?? FindExecutable("php");
+    }
 
     private void ShowPhpMissing()
     {
         StatusMessage.Text = "PHP introuvable.";
-        OutputPanel.AppendText("Pour exécuter ou vérifier un fichier PHP, installe PHP pour Windows et ajoute php.exe au PATH, puis redémarre KeyceCode.\r\n");
+        OutputPanel.AppendText("Aucun php.exe trouvé. KeyceCode détecte WampServer (version sélectionnée) et PHP dans le PATH; vérifie l’installation de Wamp ou configure le PATH.\r\n");
         ShowPanel("Output");
     }
 

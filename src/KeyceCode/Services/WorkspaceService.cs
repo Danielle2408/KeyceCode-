@@ -150,6 +150,7 @@ public sealed class WorkspaceService
             ".json" or ".jsonc" => ("{}", "json"),
             ".xml" => ("XML", "xml"),
             ".html" or ".htm" => ("HTML", "html"),
+            ".php" or ".php4" or ".php5" or ".phtml" or ".ctp" => ("PHP", "php"),
             ".css" => ("#", "css"),
             ".js" or ".mjs" => ("JS", "javascript"),
             ".ts" or ".tsx" => ("TS", "typescript"),
