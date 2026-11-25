@@ -675,16 +675,22 @@ public partial class MainWindow
         bool cPlusPlus, bool commandPrompt, Func<string, string> quotePath)
     {
         var compilerName = Path.GetFileName(compiler);
+        var compilerDirectory = Path.GetDirectoryName(compiler)!;
         var isMsvcStyle = compilerName.Equals("cl.exe", StringComparison.OrdinalIgnoreCase) ||
             compilerName.Equals("clang-cl.exe", StringComparison.OrdinalIgnoreCase);
         var invocation = commandPrompt ? QuoteCmd(compiler) : "& " + Quote(compiler);
+        // GCC/Clang binaries shipped by MSYS2 need their sibling DLLs (and cc1.exe)
+        // discoverable even when the compiler was found outside the terminal PATH.
+        var pathSetup = commandPrompt
+            ? $"set \"PATH={compilerDirectory};%PATH%\" && "
+            : $"$env:PATH = {Quote(compilerDirectory + ";")} + $env:PATH; ";
         if (isMsvcStyle)
         {
             var flags = cPlusPlus ? "/nologo /W4 /EHsc /std:c++17" : "/nologo /W4 /std:c17";
-            return $"{invocation} {flags} /Fe:{quotePath(outputPath)} {quotePath(sourcePath)}";
+            return $"{pathSetup}{invocation} {flags} /Fe:{quotePath(outputPath)} {quotePath(sourcePath)}";
         }
         var standard = cPlusPlus ? "c++17" : "c17";
-        return $"{invocation} -std={standard} -Wall -Wextra {quotePath(sourcePath)} -o {quotePath(outputPath)}";
+        return $"{pathSetup}{invocation} -std={standard} -Wall -Wextra {quotePath(sourcePath)} -o {quotePath(outputPath)}";
     }
 
     private void ShowNativeCompilerMissing(string extension)
